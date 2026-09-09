@@ -26,6 +26,13 @@ for dir in ${target:+"$target"} /usr/local/bin "$HOME/.local/bin"; do
 done
 (( removed )) || echo "no gififier symlink found (pass the install directory as an argument)"
 
+# Skill symlinks that point at this checkout.
+for link in "$HOME/.claude/skills/gififier" "$HOME/.codex/skills/gififier"; do
+  if [[ -L "$link" && "$(readlink "$link")" == "$here/skills/gififier" ]]; then
+    rm -f "$link"; echo "removed $link"
+  fi
+done
+
 if (( purge )); then
   rm -rf "$cache"; echo "removed $cache"
 else

@@ -1,136 +1,153 @@
 # gififier
 
-LICEcap for the command line. `gififier` records a window, a screen region, or the whole
-screen on macOS and encodes the result as an animated GIF. It prints the output path
+LICEcap for the command line. `gififier` records a window, a screen region, or a
+display on macOS and encodes the result as an animated GIF. It prints the output path
 and stops there. What happens to the file, for example posting it on a pull request,
-is up to the caller. It is meant for coding agents that need to show visual proof of a
-frontend change.
+is up to the caller.
 
-## Requirements
+It is built for coding agents that need to show visual proof of a frontend change, and
+it ships an agent skill for Claude Code, Codex, Cursor, Copilot, and `AGENTS.md`.
 
-- macOS (uses the built-in `screencapture`)
-- `ffmpeg` (`brew install ffmpeg`)
-- Xcode Command Line Tools for `swiftc` (`xcode-select --install`). It is used once to
-  build a small window-lookup helper.
-- Screen Recording permission, see below
+```sh
+id=$(gififier find "localhost:3000")
+gififier start -i "$id"
+# drive the UI
+gif=$(gififier stop)
+```
 
 ## Install
 
-```sh
-git clone <this repo> ~/GitHub/gififier
-~/GitHub/gififier/install.sh            # links into /usr/local/bin or ~/.local/bin
-gififier doctor
-```
-
-## Uninstall
+Homebrew:
 
 ```sh
-~/GitHub/gififier/uninstall.sh            # removes the symlink
-~/GitHub/gififier/uninstall.sh --purge    # also removes ~/.cache/gififier
+brew install diegolanda/tap/gififier
 ```
 
-The uninstaller stops a running recording first. Pass the install directory as an
-argument if you installed somewhere other than `/usr/local/bin` or `~/.local/bin`.
-Asset branches created by `examples/attach-to-pr.sh` are not touched.
+One line, without Homebrew for the tool itself (ffmpeg still comes from Homebrew):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/diegolanda/gififier/main/install.sh | bash
+```
+
+From a checkout:
+
+```sh
+git clone https://github.com/diegolanda/gififier.git
+cd gififier && ./install.sh
+```
+
+Every route ends with `gififier doctor --fix`, which installs ffmpeg through Homebrew,
+starts the Xcode Command Line Tools installer if `swiftc` is missing, and asks macOS
+for the Screen Recording permission. See the permission section below.
+
+Uninstall with `./uninstall.sh` (add `--purge` to remove `~/.cache/gififier`).
+
+## Requirements
+
+- macOS. The tool uses the built-in `screencapture`.
+- `ffmpeg`, installed by `doctor --fix` or `brew install ffmpeg`.
+- Xcode Command Line Tools, for a one-time compile of a small Swift helper that lists
+  windows and displays. Homebrew installs ship the helper prebuilt.
+- Screen Recording permission for the application that hosts the shell.
 
 ## Screen Recording permission
 
-macOS only lets applications with Screen Recording permission capture the screen.
-The permission belongs to the application that hosts the shell, for example
-Terminal.app, iTerm, VS Code, or an agent runner.
+macOS only lets applications with Screen Recording permission capture the screen. The
+permission belongs to the application that hosts the shell, for example Terminal.app,
+iTerm, VS Code, or an agent runner. No tool can grant it to itself.
 
 `gififier` tries two routes:
 
 1. Direct. The host application has the permission. This is the fastest route.
 2. Through Terminal.app. If the host lacks the permission, the capture runs inside a
    minimized Terminal.app window, because Terminal usually has the permission already.
-   This adds about one second per recording and requires that the host is allowed to
+   This adds one to two seconds per recording and requires that the host is allowed to
    control Terminal.app (System Settings > Privacy & Security > Automation).
 
 `gififier doctor` reports which route is available and names the host application.
-`gififier doctor --fix` installs ffmpeg with Homebrew, starts the Xcode Command Line
-Tools installer, and asks macOS to show the Screen Recording dialog for the host
-application. No tool can grant the permission by itself. You still enable the switch
-and restart the application.
-To grant the permission, open System Settings > Privacy & Security > Screen & System
-Audio Recording, enable the application, and restart it. The route is cached for ten
-minutes. Run `doctor` after changing permissions.
-
-Window titles are only visible through a route with the permission. If no route has
-it, `gififier windows` still lists app names and ids, with empty titles.
+`gififier doctor --fix` asks macOS to show the permission dialog for that application
+and opens the settings pane. Enable the application there and restart it. The route is
+cached for ten minutes per host application. `doctor` clears the cache.
 
 ## Usage
 
-Record the Chrome window for 8 seconds:
-
 ```sh
-gififier record -w "Google Chrome" -d 8 -o proof.gif
-```
-
-`-w` matches app names first, then window titles, and picks the first window in
-front-to-back order. With several windows of the same app, use `-i <id>` from
-`gififier windows` instead.
-
-Record while a script drives the UI:
-
-```sh
-gififier start -w Chrome
-# ...click through the feature...
-gififier stop -o proof.gif
-```
-
-Record a region, a specific window id, or another display:
-
-```sh
-gififier windows                          # list ids, apps, titles, bounds
-gififier record -i 8836 -d 5
-gififier record -r 0,80,1200,800 -d 5     # x,y,w,h in points, global coordinates
-gififier screens                          # list displays with bounds and scale
-gififier record --display 2 -d 5
-```
-
-Region coordinates are global, so a region on a second display uses that display's
-bounds from `gififier screens`.
-
-Find a window id for a script:
-
-```sh
-id=$(gififier find "localhost:3000")     # app name or title, same rules as -w
-gififier find "localhost:3000" --json
-gififier windows --json
-```
-
-Convert an existing recording:
-
-```sh
+gififier record -w "Google Chrome" -d 8 -o proof.gif    # fixed length
+gififier start -i 8836 && ... && gififier stop -o proof.gif
+gififier record -r 0,80,1200,800 -d 5                   # region: x,y,w,h in points
+gififier record --display 2 -d 5                        # another display
 gififier convert clip.mov -o clip.gif --width 800 --fps 12
 ```
 
+Find what to record:
+
+```sh
+gififier windows            # id, app, title, bounds for every on-screen window
+gififier windows --json
+gififier find "localhost:3000"          # prints the id that -w would pick
+gififier find "Google Chrome" --json
+gififier screens            # displays with bounds and scale
+```
+
+`-w` and `find` match app names first, then window titles, case-insensitively, and pick
+the first window in front-to-back order. With several windows of the same app, use the
+id.
+
 Run `gififier --help` for every option.
 
-## Output defaults
+## Output
 
 | Setting | Default |
 | --- | --- |
 | Output path | `~/.cache/gififier/out/gififier-<timestamp>.gif` (`-o` or `GIFIFIER_OUT`) |
 | Duration (`record`) | 5 seconds |
-| Frame rate | 10 fps (`GIFIFIER_FPS`) |
-| Size | Same as the on-screen point size. Retina recordings are halved. `--scale 1` keeps full pixels. |
+| Frame rate | 10 fps (`--fps`, `GIFIFIER_FPS`) |
+| Size | The on-screen point size. Retina recordings are halved. `--scale 1` keeps full pixels, `--width` sets a width. |
 | Cursor | Captured. `--no-cursor` hides it, `--clicks` highlights clicks. |
 | Window shadow | Not captured |
+| Extras | `--mp4` writes an mp4 next to the GIF, `--keep-video` keeps the source `.mov` |
 
-`gififier` prints the output path on stdout and everything else on stderr, so a script
-can capture the path with `out=$(gififier record ...)`.
+Recording commands print exactly one path on stdout. Everything else goes to stderr.
+Errors exit 1 with one line on stderr.
 
-## Agent workflow
+## Agent skill
 
-`SKILL.md` describes the workflow for coding agents. Copy or link it into your agent's
-skill directory, for example `~/.claude/skills/gififier/SKILL.md`.
+`skills/gififier/SKILL.md` is the workflow for coding agents, in the Agent Skills format
+(a Markdown file with `name` and `description` frontmatter). It is the single source for
+every harness. `install-skill.sh` places it where each harness looks:
+
+```sh
+./install-skill.sh claude                     # ~/.claude/skills/gififier
+./install-skill.sh codex                      # ~/.codex/skills/gififier
+./install-skill.sh cursor  --project ~/app    # ~/app/.cursor/rules/gififier.mdc
+./install-skill.sh copilot --project ~/app    # ~/app/.github/instructions/gififier.instructions.md
+./install-skill.sh agents  --project ~/app    # a marked section in ~/app/AGENTS.md
+./install-skill.sh all     --project ~/app    # everything above, project-scoped
+```
+
+Claude Code and Codex read `SKILL.md` directly and get a symlink to the checkout, so
+updates apply without reinstalling. Pass `--copy` for a copy instead. Cursor and Copilot
+get a generated file with the same body and their own frontmatter. The `AGENTS.md`
+section is wrapped in markers and replaced on reinstall.
+
+`install.sh --skill claude` does the tool and the skill in one step.
 
 ## Posting a GIF on a pull request
 
-This is outside the tool. `examples/attach-to-pr.sh` shows one way: it uploads the
-file to an orphan `gififier-assets` branch through the GitHub API and comments on the
-PR with the image, so binaries stay out of the source history. Use it as is, or adapt
-it. The image URL it prints renders inside GitHub. For a private repository the URL
-does not work with `curl` or an API token.
+This is outside the tool on purpose. `examples/attach-to-pr.sh` shows one verified way:
+it uploads the file to an orphan `gififier-assets` branch through the GitHub API and
+comments on the PR with the image, so binaries stay out of the source history. Use it
+as is, or adapt it. The image URL renders inside GitHub. For a private repository the
+URL does not work with `curl` or an API token.
+
+## Development
+
+- `bin/gififier` runs on the stock macOS `/bin/bash` 3.2. CI checks syntax, shellcheck,
+  the Swift helper build, a conversion, and every skill installer on a macOS runner.
+- Captures cannot run in CI. Test them from the host application you care about, since
+  the permission is per application.
+- See `CONTRIBUTING.md`.
+
+## License
+
+MIT. See `LICENSE`.

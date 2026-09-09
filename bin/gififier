@@ -15,8 +15,12 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CACHE_DIR="${GIFIFIER_CACHE:-$HOME/.cache/gififier}"
 STATE_DIR="$CACHE_DIR/state"
 OUT_DIR="${GIFIFIER_OUT:-$CACHE_DIR/out}"
-HELPER="$CACHE_DIR/windows"
 HELPER_SRC="$ROOT_DIR/helpers/windows.swift"
+if [[ -x "$ROOT_DIR/libexec/windows" ]]; then
+  HELPER="$ROOT_DIR/libexec/windows"        # prebuilt by a package (Homebrew)
+else
+  HELPER="$CACHE_DIR/windows"               # compiled on first use
+fi
 VIA_CACHE_SECONDS=600
 
 DEFAULT_FPS="${GIFIFIER_FPS:-10}"
@@ -81,6 +85,7 @@ EOF
 # ---------------------------------------------------------------- helpers ---
 
 ensure_helper() {
+  if [[ -x "$HELPER" && "$HELPER" == "$ROOT_DIR/libexec/windows" ]]; then return 0; fi
   if [[ ! -x "$HELPER" || "$HELPER_SRC" -nt "$HELPER" ]]; then
     need swiftc "install Xcode Command Line Tools: xcode-select --install"
     mkdir -p "$CACHE_DIR"

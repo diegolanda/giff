@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # gififier - LICEcap-style screen recorder for the command line (macOS).
 # Records a region, a window, or the whole screen to an animated GIF and
-# can attach the result to a GitHub pull request.
+# prints the output path so an agent can decide what to do with the file.
 set -euo pipefail
 
 VERSION="0.2.0"
@@ -20,7 +20,6 @@ HELPER_SRC="$ROOT_DIR/helpers/windows.swift"
 VIA_CACHE_SECONDS=600
 
 DEFAULT_FPS="${GIFIFIER_FPS:-10}"
-DEFAULT_ASSET_BRANCH="${GIFIFIER_ASSET_BRANCH:-gififier-assets}"
 
 log()  { printf '%s\n' "$*" >&2; }
 die()  { log "gififier: $*"; exit 1; }
@@ -31,14 +30,13 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 usage() {
   cat <<EOF
-gififier $VERSION - record screen proof as GIF and attach it to a PR
+gififier $VERSION - record a window, region, or screen to GIF
 
 Usage:
   gififier record  [target] [options]     Record for a fixed duration (default 5s)
   gififier start   [target] [options]     Start a background recording
   gififier stop    [-o out.gif] [options] Stop the background recording and encode
   gififier convert <in.mov> [-o out.gif]  Convert an existing video to GIF
-  gififier attach  <file.gif> [options]   Upload the file and post it on a PR
   gififier windows [--json]               List on-screen windows (id, app, title, bounds)
   gififier find <app or title> [--json]   Print the id of the window that -w would pick
   gififier screens                        List displays (number, bounds, scale)
@@ -67,23 +65,14 @@ Recording options:
       --keep-video              Keep the source .mov next to the GIF
       --mp4                     Also write an .mp4 next to the GIF (smaller for long clips)
 
-Attach options:
-      --pr <number>             PR number (default: the PR of the current branch)
-      --repo <owner/name>       Repository (default: current repo)
-      --branch <name>           Branch that stores assets (default $DEFAULT_ASSET_BRANCH)
-      --message <text>          Text to place above the image
-      --body                    Append to the PR description instead of commenting
-      --no-comment              Upload only, print the image URL
-
 Environment:
   GIFIFIER_OUT       Default output directory     GIFIFIER_FPS   Default frame rate
   GIFIFIER_CACHE     Cache and state directory    GIFIFIER_VIA   auto | direct | terminal
-  GIFIFIER_ASSET_BRANCH  Asset branch name
 
 Examples:
   gififier record -w "Google Chrome" -d 8 -o proof.gif
   gififier start -w Chrome && ...drive the UI... && gififier stop -o proof.gif
-  gififier attach proof.gif --message "Before/after of the new modal"
+  gif=\$(gififier record -i \$(gififier find "localhost:3000") -d 6)
 EOF
 }
 
@@ -639,94 +628,6 @@ cmd_windows() {
   fi
 }
 
-# ---------------------------------------------------------------- attach ----
-
-# Creates an orphan branch that only holds assets, if it does not exist yet.
-ensure_asset_branch() {
-  local repo="$1" branch="$2" err
-  if err="$(gh api "repos/$repo/git/ref/heads/$branch" 2>&1 >/dev/null)"; then return 0; fi
-  [[ "$err" == *"HTTP 404"* ]] || die "cannot read $repo: $err"
-  log "creating asset branch '$branch' in $repo"
-  local blob tree commit
-  blob="$(gh api -X POST "repos/$repo/git/blobs" -f content="# gififier assets
-Screen recordings attached to pull requests by gififier. Safe to leave alone.
-" -f encoding=utf-8 --jq .sha)" || die "cannot create blob in $repo"
-  tree="$(gh api -X POST "repos/$repo/git/trees" \
-    --input <(printf '{"tree":[{"path":"README.md","mode":"100644","type":"blob","sha":"%s"}]}' "$blob") --jq .sha)" || die "cannot create tree"
-  commit="$(gh api -X POST "repos/$repo/git/commits" \
-    --input <(printf '{"message":"Initialize gififier assets branch","tree":"%s","parents":[]}' "$tree") --jq .sha)" || die "cannot create commit"
-  gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$commit" >/dev/null || die "cannot create branch $branch"
-}
-
-# safe_name <text>: keeps only [A-Za-z0-9._-], trims and collapses dashes.
-safe_name() {
-  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed 's/--*/-/g;s/^-*//;s/-*$//'
-}
-
-cmd_attach() {
-  need gh "brew install gh"
-  [[ $# -ge 1 ]] || die "usage: gififier attach <file> [--pr N] [--repo o/r] [--message text] [--body] [--no-comment]"
-  local file="$1"; shift
-  [[ -f "$file" && -s "$file" ]] || die "file not found: $file"
-  local pr="" repo="" branch="$DEFAULT_ASSET_BRANCH" message="" mode="comment"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --pr)         optval "$1" $#; pr="$2"; shift 2 ;;
-      --repo)       optval "$1" $#; repo="$2"; shift 2 ;;
-      --branch)     optval "$1" $#; branch="$2"; shift 2 ;;
-      --message)    optval "$1" $#; message="$2"; shift 2 ;;
-      --body)       mode="body"; shift ;;
-      --no-comment) mode="none"; shift ;;
-      *) die "unknown option: $1" ;;
-    esac
-  done
-  [[ -z "$pr" ]] || is_uint "$pr" || die "--pr must be a number"
-  local src_branch; src_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  [[ "$src_branch" != HEAD ]] || src_branch=""
-  [[ -n "$repo" ]] || repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || die "not in a GitHub repo (use --repo)"
-  gh api "repos/$repo" >/dev/null 2>&1 || die "repository not found or not accessible: $repo"
-  if [[ "$mode" != none && -z "$pr" ]]; then
-    [[ -n "$src_branch" ]] || die "not on a git branch (use --pr N)"
-    pr="$(gh pr view "$src_branch" --repo "$repo" --json number --jq .number 2>/dev/null || true)"
-    [[ -n "$pr" ]] || die "no open PR for branch $src_branch in $repo (create one, use --pr N, or --no-comment to only upload)"
-  fi
-
-  ensure_asset_branch "$repo" "$branch"
-
-  local slug base ext stem path
-  slug="$(safe_name "${src_branch:-misc}")"; slug="${slug:-misc}"
-  base="$(basename "$file")"
-  ext="${base##*.}"; [[ -n "$ext" && "$ext" != "$base" ]] || ext="bin"
-  stem="$(safe_name "${base%.*}")"; stem="${stem:-file}"
-  path="$slug/$(timestamp)-$$-${stem}.$(safe_name "$ext")"
-
-  log "uploading $file to $repo@$branch:$path"
-  local payload; payload="$TMP_DIR/payload.json"
-  {
-    printf '{"message":"Add %s","branch":"%s","content":"' "$path" "$branch"
-    base64 -i "$file" | tr -d '\n'
-    printf '"}'
-  } > "$payload"
-  gh api -X PUT "repos/$repo/contents/$path" --input "$payload" >/dev/null || die "upload failed"
-
-  local url="https://github.com/$repo/blob/$branch/$path?raw=true"
-  local md="![$stem.$ext]($url)"
-  [[ -z "$message" ]] || md="$(printf '%s\n\n%s' "$message" "$md")"
-
-  case "$mode" in
-    none) ;;
-    comment)
-      gh pr comment "$pr" --repo "$repo" --body "$md" >/dev/null || die "cannot comment on PR #$pr"
-      log "commented on PR #$pr" ;;
-    body)
-      local body; body="$(gh pr view "$pr" --repo "$repo" --json body --jq .body)"
-      [[ -z "$body" ]] || body="${body}"$'\n\n'
-      gh pr edit "$pr" --repo "$repo" --body "${body}${md}" >/dev/null || die "cannot edit PR #$pr"
-      log "appended to PR #$pr description" ;;
-  esac
-  printf '%s\n' "$url"
-}
-
 # ---------------------------------------------------------------- doctor ----
 
 cmd_doctor() {
@@ -737,8 +638,6 @@ cmd_doctor() {
   }
   check "ffmpeg installed (brew install ffmpeg)" command -v ffmpeg
   check "screencapture available" command -v screencapture
-  check "gh installed (brew install gh)" command -v gh
-  check "gh authenticated (gh auth login)" gh auth status
   if (ensure_helper) >/dev/null 2>&1; then
     log "ok    window helper compiled ($HELPER)"
   else
@@ -773,7 +672,6 @@ case "$cmd" in
   start)    cmd_start "$@" ;;
   stop)     cmd_stop "$@" ;;
   convert)  cmd_convert "$@" ;;
-  attach)   cmd_attach "$@" ;;
   windows)  cmd_windows "$@" ;;
   find)     cmd_find "$@" ;;
   screens)  cmd_screens ;;

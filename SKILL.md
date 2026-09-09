@@ -1,11 +1,12 @@
 ---
 name: gififier
-description: Record a GIF of a frontend change with the gififier CLI and attach it to the pull request as visual proof. Use after UI changes when a PR needs a screen recording.
+description: Record a GIF of a frontend change with the gififier CLI as visual proof for a pull request. Use after UI changes when a PR needs a screen recording.
 ---
 
 # gififier
 
-Use `gififier` to record visual proof of a frontend change and attach it to the PR.
+Use `gififier` to record visual proof of a frontend change. The tool only produces
+the GIF and prints its path. You decide how to share it.
 
 ## Preconditions
 
@@ -23,19 +24,17 @@ Use `gififier` to record visual proof of a frontend change and attach it to the 
    stdout. Without `-o`, files go to `~/.cache/gififier/out`, outside the project.
 5. Check that the GIF is under a few MB. If it is large, re-encode the kept video:
    `gififier convert "${gif%.gif}.mov" --width 800 --fps 8 -o "$gif"`.
-6. Attach it: `gififier attach "$gif" --message "<what the recording shows>"`.
-   The current branch must have an open PR. Create the PR first with `gh pr create`,
-   or pass `--pr <n>`.
+6. Share it in the PR. One verified way is `examples/attach-to-pr.sh "$gif" --message
+   "<what the recording shows>"` from the gififier repo, which uploads the file to an
+   orphan `gififier-assets` branch and comments on the PR of the current branch. Any
+   other method is fine, for example a dedicated screenshots branch or an external host.
+   Do not commit the GIF to the source branch.
 
 For a short fixed clip, use one command: `gif=$(gififier record -i <id> -d 6)`.
 
 ## Notes
 
 - Do not write GIFs inside the project with `-o` unless the path is ignored by git.
-  `attach` stores the file on the `gififier-assets` branch, so GIFs never need to be
-  committed.
-- `attach` prints the image URL. Use `--body` to put the image in the PR description
-  instead of a comment.
 - Never leave a recording running. `gififier stop` also cleans up state.
 - If the host lacks Screen Recording permission, recordings run through a minimized
   Terminal.app window. A Terminal window appears briefly. This is expected.

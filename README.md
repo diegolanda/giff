@@ -1,8 +1,9 @@
 # gififier
 
 LICEcap for the command line. `gififier` records a window, a screen region, or the whole
-screen on macOS, encodes the result as an animated GIF, and can attach it to a GitHub
-pull request. It is meant for coding agents that need to show visual proof of a
+screen on macOS and encodes the result as an animated GIF. It prints the output path
+and stops there. What happens to the file, for example posting it on a pull request,
+is up to the caller. It is meant for coding agents that need to show visual proof of a
 frontend change.
 
 ## Requirements
@@ -11,7 +12,6 @@ frontend change.
 - `ffmpeg` (`brew install ffmpeg`)
 - Xcode Command Line Tools for `swiftc` (`xcode-select --install`). It is used once to
   build a small window-lookup helper.
-- `gh` (`brew install gh`, then `gh auth login`) for `gififier attach`
 - Screen Recording permission, see below
 
 ## Install
@@ -31,7 +31,7 @@ gififier doctor
 
 The uninstaller stops a running recording first. Pass the install directory as an
 argument if you installed somewhere other than `/usr/local/bin` or `~/.local/bin`.
-The `gififier-assets` branches in your repositories are not touched.
+Asset branches created by `examples/attach-to-pr.sh` are not touched.
 
 ## Screen Recording permission
 
@@ -88,21 +88,13 @@ gififier record --display 2 -d 5
 Region coordinates are global, so a region on a second display uses that display's
 bounds from `gififier screens`.
 
-Attach the GIF to the pull request of the current branch:
+Find a window id for a script:
 
 ```sh
-gififier attach proof.gif --message "New modal animation"
+id=$(gififier find "localhost:3000")     # app name or title, same rules as -w
+gififier find "localhost:3000" --json
+gififier windows --json
 ```
-
-`attach` uploads the file to an orphan branch named `gififier-assets` in the same
-repository and posts a comment with the image. Use `--body` to append the image to the
-PR description instead, or `--no-comment` to only print the image URL. The asset branch
-has no shared history with your source branches.
-
-The printed image URL renders inside GitHub for everyone who can see the repository.
-For a private repository the URL does not work with `curl` or an API token. Use the
-contents API (`gh api repos/OWNER/REPO/contents/PATH?ref=gififier-assets`) to download
-the file from a script.
 
 Convert an existing recording:
 
@@ -122,7 +114,6 @@ Run `gififier --help` for every option.
 | Size | Same as the on-screen point size. Retina recordings are halved. `--scale 1` keeps full pixels. |
 | Cursor | Captured. `--no-cursor` hides it, `--clicks` highlights clicks. |
 | Window shadow | Not captured |
-| Asset branch | `gififier-assets` (`GIFIFIER_ASSET_BRANCH`) |
 
 `gififier` prints the output path on stdout and everything else on stderr, so a script
 can capture the path with `out=$(gififier record ...)`.
@@ -131,3 +122,11 @@ can capture the path with `out=$(gififier record ...)`.
 
 `SKILL.md` describes the workflow for coding agents. Copy or link it into your agent's
 skill directory, for example `~/.claude/skills/gififier/SKILL.md`.
+
+## Posting a GIF on a pull request
+
+This is outside the tool. `examples/attach-to-pr.sh` shows one way: it uploads the
+file to an orphan `gififier-assets` branch through the GitHub API and comments on the
+PR with the image, so binaries stay out of the source history. Use it as is, or adapt
+it. The image URL it prints renders inside GitHub. For a private repository the URL
+does not work with `curl` or an API token.

@@ -8,8 +8,8 @@ class Gififier < Formula
   sha256 "fabf76fe13acf0efa251526c942c24d84685afa066251e2424d998fd5e1568ff"
   license "MIT"
 
-  depends_on :macos
   depends_on "ffmpeg"
+  depends_on :macos
 
   def install
     system "swiftc", "-O", "-o", "windows", "helpers/windows.swift"

@@ -39,7 +39,8 @@ Usage:
   gififier stop    [-o out.gif] [options] Stop the background recording and encode
   gififier convert <in.mov> [-o out.gif]  Convert an existing video to GIF
   gififier attach  <file.gif> [options]   Upload the file and post it on a PR
-  gififier windows                        List on-screen windows (id, app, title, bounds)
+  gififier windows [--json]               List on-screen windows (id, app, title, bounds)
+  gififier find <app or title> [--json]   Print the id of the window that -w would pick
   gififier screens                        List displays (number, bounds, scale)
   gififier doctor                         Check dependencies and permissions
 
@@ -583,15 +584,59 @@ cmd_screens() {
   "$HELPER" screens | awk -F'\t' '{ printf "%d\t%s\t%s\n", $1+1, $2, $3 }'
 }
 
-cmd_windows() {
+# windows_json <tsv lines>: prints a JSON array of window objects.
+windows_json() {
+  awk -F'\t' '
+    function esc(v) { gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v); return v }
+    BEGIN { printf "[" }
+    NF >= 5 {
+      split($5, r, ",")
+      printf "%s{\"id\":%s,\"app\":\"%s\",\"title\":\"%s\",\"x\":%s,\"y\":%s,\"w\":%s,\"h\":%s}",
+        (n++ ? "," : ""), $1, esc($3), esc($4), r[1], r[2], r[3], r[4]
+    }
+    END { print "]" }'
+}
+
+cmd_find() {
+  local query="" json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      -*) die "unknown option: $1" ;;
+      *) query="$1"; shift ;;
+    esac
+  done
+  [[ -n "$query" ]] || die "usage: gififier find <app or title> [--json]"
+  resolve_route_for_listing
+  local hit; hit="$(find_window "$query" || true)"
+  [[ -n "$hit" ]] || die "no on-screen window matches '$query' (try: gififier windows)"
+  local id="${hit%%$'\t'*}"
+  if (( json )); then
+    list_windows | awk -F'\t' -v id="$id" '$1==id' | windows_json
+  else
+    printf '%s\n' "$id"
+  fi
+}
+
+resolve_route_for_listing() {
   local route
   route="$( (check_capture_ready 2>/dev/null && printf '%s\n' "$CAPTURE_VIA") || true )"
   CAPTURE_VIA="${route:-none}"
   if [[ "$CAPTURE_VIA" == none ]]; then
     log "note: no Screen Recording permission, so window titles are empty (run: gififier doctor)"
   fi
-  printf 'ID\tAPP\tTITLE\tX,Y,W,H\n'
-  list_windows | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $1, $3, $4, $5 }'
+}
+
+cmd_windows() {
+  local json=0
+  [[ "${1:-}" != --json ]] || json=1
+  resolve_route_for_listing
+  if (( json )); then
+    list_windows | windows_json
+  else
+    printf 'ID\tAPP\tTITLE\tX,Y,W,H\n'
+    list_windows | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $1, $3, $4, $5 }'
+  fi
 }
 
 # ---------------------------------------------------------------- attach ----
@@ -729,7 +774,8 @@ case "$cmd" in
   stop)     cmd_stop "$@" ;;
   convert)  cmd_convert "$@" ;;
   attach)   cmd_attach "$@" ;;
-  windows)  cmd_windows ;;
+  windows)  cmd_windows "$@" ;;
+  find)     cmd_find "$@" ;;
   screens)  cmd_screens ;;
   doctor)   cmd_doctor ;;
   -v|--version|version) echo "gififier $VERSION" ;;

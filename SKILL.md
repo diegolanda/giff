@@ -15,8 +15,9 @@ Use `gififier` to record visual proof of a frontend change and attach it to the 
 
 ## Procedure
 
-1. Find the browser window: `gififier windows`. Pick the id whose title matches the page.
-2. Start the recording: `gififier start -i <id>` (or `-w "Google Chrome"`).
+1. Find the browser window: `id=$(gififier find "localhost:3000")`. The query matches
+   an app name or a window title. Run `gififier windows` to see every candidate.
+2. Start the recording: `gififier start -i "$id"`.
 3. Drive the UI through the change you want to show. Keep it under 15 seconds.
 4. Stop and encode: `gif=$(gififier stop --keep-video)`. The GIF path is printed on
    stdout. Without `-o`, files go to `~/.cache/gififier/out`, outside the project.

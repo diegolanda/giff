@@ -4,7 +4,7 @@
 # can attach the result to a GitHub pull request.
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 SELF="${BASH_SOURCE[0]}"
 while [[ -L "$SELF" ]]; do
   link="$(readlink "$SELF")"
@@ -14,8 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CACHE_DIR="${GIFIFIER_CACHE:-$HOME/.cache/gififier}"
 STATE_DIR="$CACHE_DIR/state"
+OUT_DIR="${GIFIFIER_OUT:-$CACHE_DIR/out}"
 HELPER="$CACHE_DIR/windows"
 HELPER_SRC="$ROOT_DIR/helpers/windows.swift"
+VIA_CACHE="$CACHE_DIR/via"
+VIA_CACHE_SECONDS=600
 
 DEFAULT_FPS="${GIFIFIER_FPS:-10}"
 DEFAULT_ASSET_BRANCH="${GIFIFIER_ASSET_BRANCH:-gififier-assets}"
@@ -23,6 +26,9 @@ DEFAULT_ASSET_BRANCH="${GIFIFIER_ASSET_BRANCH:-gififier-assets}"
 log()  { printf '%s\n' "$*" >&2; }
 die()  { log "gififier: $*"; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1 ($2)"; }
+
+TMP_DIR="$(mktemp -d -t gififier)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 usage() {
   cat <<EOF
@@ -38,7 +44,8 @@ Usage:
   gififier doctor                         Check dependencies and permissions
 
 Target (pick one, default is the main screen):
-  -w, --window <app or title>   Record the frontmost window of that app (substring match)
+  -w, --window <app or title>   Record the first window whose app name or title
+                                contains this text (case-insensitive)
   -i, --window-id <id>          Record the window with this id (see: gififier windows)
   -r, --region <x,y,w,h>        Record this screen rectangle (points, top-left origin)
       --screen                  Record the whole main screen
@@ -46,13 +53,15 @@ Target (pick one, default is the main screen):
 Recording options:
   -d, --duration <sec>          Seconds to record (record only, default 5)
       --delay <sec>             Wait this long before recording starts
-  -o, --out <file>              Output path (default ./gififier-<timestamp>.gif)
+  -o, --out <file>              Output path (default $OUT_DIR/gififier-<timestamp>.gif)
       --fps <n>                 GIF frame rate (default $DEFAULT_FPS)
-      --scale <factor>          Resize factor. Default 1/backing-scale (Retina -> 0.5)
+      --scale <factor>          Resize factor relative to the recorded pixels.
+                                Default makes the GIF match the on-screen point size
+                                (0.5 on Retina displays). --scale 1 keeps full pixels.
       --width <px>              Resize to this width instead of --scale
       --no-cursor               Do not capture the mouse cursor
       --clicks                  Highlight mouse clicks
-      --keep-video              Keep the intermediate .mov next to the GIF
+      --keep-video              Keep the source .mov next to the GIF
       --mp4                     Also write an .mp4 next to the GIF (smaller for long clips)
 
 Attach options:
@@ -62,6 +71,11 @@ Attach options:
       --message <text>          Text to place above the image
       --body                    Append to the PR description instead of commenting
       --no-comment              Upload only, print the image URL
+
+Environment:
+  GIFIFIER_OUT       Default output directory     GIFIFIER_FPS   Default frame rate
+  GIFIFIER_CACHE     Cache and state directory    GIFIFIER_VIA   auto | direct | terminal
+  GIFIFIER_ASSET_BRANCH  Asset branch name
 
 Examples:
   gififier record -w "Google Chrome" -d 8 -o proof.gif
@@ -81,34 +95,59 @@ ensure_helper() {
   fi
 }
 
-backing_scale() {
+# Lists windows. Runs the helper inside Terminal.app when this process lacks
+# Screen Recording permission, because window titles are hidden otherwise.
+list_windows() {
   ensure_helper
-  "$HELPER" screens | head -1 | cut -f3
+  if [[ "$(cached_via)" == terminal ]]; then
+    local dir; dir="$TMP_DIR/windows"; mkdir -p "$dir"
+    printf '#!/bin/bash\n%q list >%q 2>/dev/null\ntouch %q\nexit\n' "$HELPER" "$dir/out" "$dir/done" > "$dir/run.sh"
+    chmod +x "$dir/run.sh"
+    local win; win="$(terminal_run "$dir/run.sh")" || { "$HELPER" list; return; }
+    wait_for_file "$dir/done" 100 || true
+    terminal_close "$win"
+    cat "$dir/out" 2>/dev/null
+  else
+    "$HELPER" list
+  fi
+}
+
+main_screen_rect() {
+  ensure_helper
+  local f; f="$("$HELPER" screens | head -1 | cut -f2)"
+  printf '0,0,%s\n' "${f#*,*,}"
 }
 
 # Prints "id<TAB>x,y,w,h" for the first window matching an app name or title.
 find_window() {
-  ensure_helper
-  local q="$1"
-  local ql; ql="$(printf '%s' "$q" | tr '[:upper:]' '[:lower:]')"
-  "$HELPER" list | awk -F'\t' -v q="$ql" '
+  local ql; ql="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  list_windows | awk -F'\t' -v q="$ql" '
     index(tolower($3), q) || index(tolower($4), q) { print $1 "\t" $5; found=1; exit }
     END { exit !found }'
 }
 
 window_rect_by_id() {
-  ensure_helper
-  "$HELPER" list | awk -F'\t' -v id="$1" '$1==id {print $5; exit}'
+  list_windows | awk -F'\t' -v id="$1" '$1==id {print $5; exit}'
 }
 
 timestamp() { date +%Y%m%d-%H%M%S; }
 
+# wait_for_file <path> <tenths of a second>
+wait_for_file() {
+  local i=0
+  while [[ ! -e "$1" ]] && (( i < $2 )); do sleep 0.1; i=$((i+1)); done
+  [[ -e "$1" ]]
+}
+
+is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
+is_num()  { [[ "$1" =~ ^[0-9]*\.?[0-9]+$ ]]; }
+
+# optval <flag> <count of remaining args>
+optval() { (( $2 >= 2 )) || die "option $1 needs a value"; }
+
 has_screen_permission() {
-  local t; t="$(mktemp -t gififier).png"
-  if screencapture -x -R 0,0,2,2 "$t" >/dev/null 2>&1 && [[ -s "$t" ]]; then
-    rm -f "$t"; return 0
-  fi
-  rm -f "$t"; return 1
+  local t; t="$TMP_DIR/probe-direct.png"
+  screencapture -x -R 0,0,2,2 "$t" >/dev/null 2>&1 && [[ -s "$t" ]]
 }
 
 # Walks up the process tree and prints the .app bundle that hosts this shell.
@@ -126,6 +165,132 @@ host_app() {
   echo "your terminal application"
 }
 
+# ---------------------------------------------------------------- terminal --
+# When the host app lacks Screen Recording permission, captures run inside a
+# Terminal.app window, because Terminal usually holds that permission.
+
+OSASCRIPT_ERROR=""
+
+# Runs a shell script inside a new, minimized Terminal.app window and prints
+# the window id.
+terminal_run() {
+  local script="$1" out
+  out="$(osascript -e "tell application \"Terminal\" to do script (quoted form of \"$script\")" 2>&1)" \
+    || { OSASCRIPT_ERROR="$out"; return 1; }
+  local win="${out##* }"
+  osascript -e "tell application \"Terminal\" to set miniaturized of window id $win to true" >/dev/null 2>&1 || true
+  printf '%s\n' "$win"
+}
+
+terminal_close() {
+  [[ -n "${1:-}" ]] || return 0
+  osascript -e "tell application \"Terminal\" to close (every window whose id is $1)" >/dev/null 2>&1 || true
+}
+
+terminal_has_permission() {
+  command -v osascript >/dev/null 2>&1 || return 1
+  local dir; dir="$TMP_DIR/probe-terminal"; mkdir -p "$dir"
+  printf '#!/bin/bash\nscreencapture -x -R 0,0,2,2 %q >/dev/null 2>&1\ntouch %q\nexit\n' "$dir/probe.png" "$dir/done" > "$dir/probe.sh"
+  chmod +x "$dir/probe.sh"
+  local win; win="$(terminal_run "$dir/probe.sh")" || return 1
+  wait_for_file "$dir/done" 100 || true
+  terminal_close "$win"
+  [[ -s "$dir/probe.png" ]]
+}
+
+# Prints the cached capture route (direct|terminal) if it is fresh, else "".
+cached_via() {
+  [[ -f "$VIA_CACHE" ]] || return 0
+  local age; age=$(( $(date +%s) - $(stat -f %m "$VIA_CACHE") ))
+  if (( age < VIA_CACHE_SECONDS )); then cat "$VIA_CACHE"; fi
+}
+
+# Sets CAPTURE_VIA to "direct" or "terminal".
+check_capture_ready() {
+  need screencapture "macOS built-in"
+  CAPTURE_VIA="${GIFIFIER_VIA:-auto}"
+  case "$CAPTURE_VIA" in
+    direct) has_screen_permission || die "Screen Recording permission is missing for $(host_app). Run: gififier doctor" ;;
+    terminal) terminal_has_permission || die "Terminal.app cannot record the screen. Run: gififier doctor" ;;
+    auto)
+      local cached; cached="$(cached_via)"
+      if [[ -n "$cached" ]]; then CAPTURE_VIA="$cached"
+      elif has_screen_permission; then CAPTURE_VIA=direct
+      elif terminal_has_permission; then CAPTURE_VIA=terminal; log "note: capturing through Terminal.app because $(host_app) lacks Screen Recording permission"
+      else die "Screen Recording permission is missing for $(host_app) and Terminal.app. Run: gififier doctor"
+      fi
+      mkdir -p "$CACHE_DIR"; printf '%s\n' "$CAPTURE_VIA" > "$VIA_CACHE" ;;
+    *) die "GIFIFIER_VIA must be auto, direct, or terminal" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- capture ---
+
+# write_capture_script <dir> <mode:once|bg> <mov> [screencapture args...]
+# screencapture -v stops as soon as it reads a byte or EOF on stdin, so the
+# script feeds it a stdin that never closes (a sleeping process on a fifo).
+write_capture_script() {
+  local dir="$1" mode="$2" mov="$3"; shift 3
+  {
+    printf '#!/bin/bash\n'
+    printf 'mkfifo %q\nsleep 2147483647 >%q &\necho $! >%q\n' "$dir/stdin" "$dir/stdin" "$dir/sleep.pid"
+    printf 'screencapture -v -x'
+    printf ' %q' "$@" "$mov"
+    printf ' <%q >%q 2>&1' "$dir/stdin" "$dir/log"
+    if [[ "$mode" == bg ]]; then
+      printf ' &\necho $! >%q\nwait $!\n' "$dir/pid"
+    else
+      printf '\n'
+    fi
+    printf 'rc=$?\nkill "$(cat %q)" 2>/dev/null\necho $rc >%q\nexit\n' "$dir/sleep.pid" "$dir/done"
+  } > "$dir/run.sh"
+  chmod +x "$dir/run.sh"
+}
+
+# Kills whatever a capture dir describes: screencapture, the stdin holder,
+# and the Terminal window.
+cleanup_capture_dir() {
+  local dir="$1" f
+  for f in pid sleep.pid; do
+    if [[ -s "$dir/$f" ]]; then kill "$(cat "$dir/$f")" 2>/dev/null || true; fi
+  done
+  if [[ -s "$dir/window" ]]; then terminal_close "$(cat "$dir/window")"; fi
+}
+
+# Starts run.sh in <dir> according to CAPTURE_VIA. Records the Terminal window id.
+launch_capture_script() {
+  local dir="$1"
+  if [[ "$CAPTURE_VIA" == direct ]]; then
+    nohup bash "$dir/run.sh" </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  else
+    local win; win="$(terminal_run "$dir/run.sh")" || die "cannot start Terminal.app: ${OSASCRIPT_ERROR:-unknown error}"
+    printf '%s\n' "$win" > "$dir/window"
+  fi
+}
+
+capture_error_text() {
+  grep -v 'stop screen recording' "$1/log" 2>/dev/null || true
+}
+
+# run_capture <mov> [screencapture args...]
+# Synchronous capture (record mode). Blocks until the video is written.
+run_capture() {
+  local mov="$1"; shift
+  local dir; dir="$TMP_DIR/capture"; mkdir -p "$dir"
+  write_capture_script "$dir" once "$mov" "$@"
+  launch_capture_script "$dir"
+  if ! wait_for_file "$dir/done" $(( (DURATION + 20) * 10 )); then
+    cleanup_capture_dir "$dir"; die "capture timed out"
+  fi
+  if [[ -s "$dir/window" ]]; then terminal_close "$(cat "$dir/window")"; fi
+  local rc; rc="$(cat "$dir/done")"
+  if [[ "$rc" != 0 ]]; then
+    log "$(capture_error_text "$dir")"
+    die "screencapture failed (exit $rc)"
+  fi
+}
+
 # ---------------------------------------------------------------- encode ----
 
 # encode <in.mov> <out.gif> <fps> <scale> <width> <mp4:0|1>
@@ -134,16 +299,30 @@ encode_gif() {
   need ffmpeg "brew install ffmpeg"
   local resize
   if [[ -n "$width" ]]; then
-    resize="scale=${width}:-2:flags=lanczos"
+    resize="scale=trunc(${width}/2)*2:-2:flags=lanczos"
   else
     resize="scale=trunc(iw*${scale}/2)*2:-2:flags=lanczos"
   fi
   local vf="fps=${fps},${resize},split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
-  ffmpeg -hide_banner -loglevel error -y -i "$in" -vf "$vf" -loop 0 "$out"
+  ffmpeg -hide_banner -loglevel error -y -i "$in" -vf "$vf" -loop 0 "$out" || return 1
   if [[ "$mp4" == 1 ]]; then
+    local m; m="$(sibling_path "$out" mp4)"
     ffmpeg -hide_banner -loglevel error -y -i "$in" -vf "fps=${fps},${resize}" \
-      -c:v libx264 -pix_fmt yuv420p -crf 23 -movflags +faststart "${out%.*}.mp4"
+      -c:v libx264 -pix_fmt yuv420p -crf 23 -movflags +faststart "$m" || return 1
+    log "wrote $m ($(file_size "$m"))"
   fi
+}
+
+# sibling_path <file> <ext>: same directory and stem, different extension.
+sibling_path() {
+  local dir base; dir="$(dirname "$1")"; base="$(basename "$1")"
+  printf '%s/%s.%s\n' "$dir" "${base%.*}" "$2"
+}
+
+file_size() { du -h "$1" | cut -f1 | tr -d ' '; }
+
+video_width() {
+  ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$1" 2>/dev/null | head -1
 }
 
 # ---------------------------------------------------------------- record ----
@@ -154,16 +333,16 @@ parse_target_and_opts() {
   CURSOR=1; CLICKS=0; KEEP_VIDEO=0; MP4=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -w|--window)     TARGET_MODE="window";    TARGET_ARG="$2"; shift 2 ;;
-      -i|--window-id)  TARGET_MODE="window-id"; TARGET_ARG="$2"; shift 2 ;;
-      -r|--region)     TARGET_MODE="region";    TARGET_ARG="$2"; shift 2 ;;
+      -w|--window)     optval "$1" $#; TARGET_MODE="window";    TARGET_ARG="$2"; shift 2 ;;
+      -i|--window-id)  optval "$1" $#; TARGET_MODE="window-id"; TARGET_ARG="$2"; shift 2 ;;
+      -r|--region)     optval "$1" $#; TARGET_MODE="region";    TARGET_ARG="$2"; shift 2 ;;
       --screen)        TARGET_MODE="screen"; shift ;;
-      -d|--duration)   DURATION="$2"; shift 2 ;;
-      --delay)         DELAY="$2"; shift 2 ;;
-      -o|--out)        OUT="$2"; shift 2 ;;
-      --fps)           FPS="$2"; shift 2 ;;
-      --scale)         SCALE="$2"; shift 2 ;;
-      --width)         WIDTH="$2"; shift 2 ;;
+      -d|--duration)   optval "$1" $#; DURATION="$2"; shift 2 ;;
+      --delay)         optval "$1" $#; DELAY="$2"; shift 2 ;;
+      -o|--out)        optval "$1" $#; OUT="$2"; shift 2 ;;
+      --fps)           optval "$1" $#; FPS="$2"; shift 2 ;;
+      --scale)         optval "$1" $#; SCALE="$2"; shift 2 ;;
+      --width)         optval "$1" $#; WIDTH="$2"; shift 2 ;;
       --no-cursor)     CURSOR=0; shift ;;
       --clicks)        CLICKS=1; shift ;;
       --keep-video)    KEEP_VIDEO=1; shift ;;
@@ -172,223 +351,165 @@ parse_target_and_opts() {
       *) die "unknown option: $1 (see --help)" ;;
     esac
   done
+  validate_encode_opts
+  is_uint "$DURATION" && (( DURATION > 0 )) || die "--duration must be a whole number of seconds"
+  is_uint "$DELAY" || die "--delay must be a whole number of seconds"
+  if [[ "$TARGET_MODE" == window-id ]]; then is_uint "$TARGET_ARG" || die "--window-id must be a number"; fi
+  if [[ "$TARGET_MODE" == region ]]; then
+    [[ "$TARGET_ARG" =~ ^-?[0-9]+,-?[0-9]+,[0-9]+,[0-9]+$ ]] || die "region must be x,y,w,h"
+  fi
 }
 
-# Sets CAPTURE_ARGS (array) and CAPTURE_DESC from the parsed target.
+validate_encode_opts() {
+  is_uint "$FPS" && (( FPS > 0 )) || die "--fps must be a positive whole number"
+  [[ -z "$SCALE" ]] || is_num "$SCALE" || die "--scale must be a number"
+  [[ -z "$WIDTH" ]] || is_uint "$WIDTH" || die "--width must be a whole number of pixels"
+}
+
+# Sets CAPTURE_ARGS (array), CAPTURE_RECT (x,y,w,h in points) and CAPTURE_DESC.
 resolve_target() {
   CAPTURE_ARGS=()
   case "$TARGET_MODE" in
     screen)
-      CAPTURE_DESC="main screen" ;;
+      CAPTURE_RECT="$(main_screen_rect)"; CAPTURE_DESC="main screen" ;;
     region)
-      [[ "$TARGET_ARG" =~ ^-?[0-9]+,-?[0-9]+,[0-9]+,[0-9]+$ ]] || die "region must be x,y,w,h"
-      CAPTURE_ARGS=(-R "$TARGET_ARG"); CAPTURE_DESC="region $TARGET_ARG" ;;
+      CAPTURE_ARGS=(-R "$TARGET_ARG"); CAPTURE_RECT="$TARGET_ARG"; CAPTURE_DESC="region $TARGET_ARG" ;;
     window)
       local hit; hit="$(find_window "$TARGET_ARG" || true)"
       [[ -n "$hit" ]] || die "no on-screen window matches '$TARGET_ARG' (try: gififier windows)"
-      local id rect; id="${hit%%$'\t'*}"; rect="${hit#*$'\t'}"
-      CAPTURE_ARGS=(-l "$id"); CAPTURE_DESC="window $id ($TARGET_ARG) at $rect" ;;
+      local id="${hit%%$'\t'*}"
+      CAPTURE_RECT="${hit#*$'\t'}"
+      CAPTURE_ARGS=(-l "$id" -o); CAPTURE_DESC="window $id ($TARGET_ARG) at $CAPTURE_RECT" ;;
     window-id)
-      local rect; rect="$(window_rect_by_id "$TARGET_ARG")"
-      [[ -n "$rect" ]] || die "window id $TARGET_ARG is not on screen"
-      CAPTURE_ARGS=(-l "$TARGET_ARG"); CAPTURE_DESC="window $TARGET_ARG at $rect" ;;
+      CAPTURE_RECT="$(window_rect_by_id "$TARGET_ARG")"
+      [[ -n "$CAPTURE_RECT" ]] || die "window id $TARGET_ARG is not on screen (try: gififier windows)"
+      CAPTURE_ARGS=(-l "$TARGET_ARG" -o); CAPTURE_DESC="window $TARGET_ARG at $CAPTURE_RECT" ;;
   esac
   if [[ "$CURSOR" == 1 ]]; then CAPTURE_ARGS+=(-C); fi
   if [[ "$CLICKS" == 1 ]]; then CAPTURE_ARGS+=(-k); fi
 }
 
-# CAPTURE_VIA is "direct" when this process may record the screen, or
-# "terminal" when the capture must run inside Terminal.app (which usually
-# holds Screen Recording permission even when the agent's host app does not).
-check_capture_ready() {
-  need screencapture "macOS built-in"
-  CAPTURE_VIA="${GIFIFIER_VIA:-auto}"
-  case "$CAPTURE_VIA" in
-    direct) has_screen_permission || die "Screen Recording permission is missing for $(host_app). Run: gififier doctor" ;;
-    terminal) terminal_has_permission || die "Terminal.app cannot record the screen. Run: gififier doctor" ;;
-    auto)
-      if has_screen_permission; then CAPTURE_VIA=direct
-      elif terminal_has_permission; then CAPTURE_VIA=terminal; log "note: capturing through Terminal.app because $(host_app) lacks Screen Recording permission"
-      else die "Screen Recording permission is missing for $(host_app) and Terminal.app. Run: gififier doctor"
-      fi ;;
-    *) die "GIFIFIER_VIA must be auto, direct, or terminal" ;;
-  esac
-}
-
-# Runs a shell script inside a new Terminal.app window and prints the window id.
-terminal_run() {
-  local script="$1" out
-  out="$(osascript -e "tell application \"Terminal\" to do script \"$script\"" 2>/dev/null)" || return 1
-  printf '%s\n' "${out##* }"
-}
-
-terminal_close() {
-  [[ -n "${1:-}" ]] || return 0
-  osascript -e "tell application \"Terminal\" to close (every window whose id is $1)" >/dev/null 2>&1 || true
-}
-
-terminal_has_permission() {
-  command -v osascript >/dev/null 2>&1 || return 1
-  local dir; dir="$(mktemp -d -t gififier)"
-  printf '#!/bin/bash\nscreencapture -x -R 0,0,2,2 "%s/probe.png" >/dev/null 2>&1\ntouch "%s/done"\nexit\n' "$dir" "$dir" > "$dir/probe.sh"
-  chmod +x "$dir/probe.sh"
-  local win; win="$(terminal_run "$dir/probe.sh")" || { rm -rf "$dir"; return 1; }
-  local i=0
-  while [[ ! -f "$dir/done" ]] && (( i < 100 )); do sleep 0.1; i=$((i+1)); done
-  terminal_close "$win"
-  local ok=1; [[ -s "$dir/probe.png" ]] || ok=0
-  rm -rf "$dir"
-  (( ok ))
-}
-
-# write_capture_script <dir> <mode:once|bg> <mov> [screencapture args...]
-# screencapture -v stops as soon as it reads a byte or EOF on stdin, so the
-# script feeds it a stdin that never closes (a sleeping process).
-write_capture_script() {
-  local dir="$1" mode="$2" mov="$3"; shift 3
-  {
-    printf '#!/bin/bash\n'
-    printf 'mkfifo "%s/stdin"\nsleep 2147483647 >"%s/stdin" &\necho $! >"%s/sleep.pid"\n' "$dir" "$dir" "$dir"
-    printf 'screencapture -v -x'
-    printf ' %q' "$@" "$mov"
-    printf ' <"%s/stdin" >"%s/log" 2>&1' "$dir" "$dir"
-    if [[ "$mode" == bg ]]; then
-      printf ' &\necho $! >"%s/pid"\nwait $!\n' "$dir"
-    else
-      printf '\n'
-    fi
-    printf 'rc=$?\nkill "$(cat "%s/sleep.pid")" 2>/dev/null\necho $rc >"%s/done"\nexit\n' "$dir" "$dir"
-  } > "$dir/run.sh"
-  chmod +x "$dir/run.sh"
-}
-
-# run_capture <mov> [screencapture args...]
-# Synchronous capture (record mode). Blocks until the video is written.
-run_capture() {
-  local mov="$1"; shift
-  local dir; dir="$(mktemp -d -t gififier)"
-  write_capture_script "$dir" once "$mov" "$@"
-  local win=""
-  if [[ "$CAPTURE_VIA" == direct ]]; then
-    bash "$dir/run.sh" </dev/null >/dev/null 2>&1 || true
-  else
-    win="$(terminal_run "$dir/run.sh")" || die "cannot start Terminal.app"
-  fi
-  local limit=$(( (DURATION + 20) * 10 )) i=0
-  while [[ ! -f "$dir/done" ]] && (( i < limit )); do sleep 0.1; i=$((i+1)); done
-  terminal_close "$win"
-  [[ -f "$dir/done" ]] || { rm -rf "$dir"; die "capture timed out"; }
-  local rc; rc="$(cat "$dir/done")"
-  if [[ "$rc" != 0 ]]; then
-    log "$(grep -v 'stop screen recording' "$dir/log" 2>/dev/null || true)"
-    rm -rf "$dir"; die "screencapture failed (exit $rc)"
-  fi
-  rm -rf "$dir"
-}
-
-# start_capture <mov> [screencapture args...]
-# Background capture (start mode). Prints the pid of screencapture.
-start_capture() {
-  local mov="$1"; shift
-  local dir="$STATE_DIR/capture"; rm -rf "$dir"; mkdir -p "$dir"
-  write_capture_script "$dir" bg "$mov" "$@"
-  if [[ "$CAPTURE_VIA" == direct ]]; then
-    (bash "$dir/run.sh" </dev/null >/dev/null 2>&1 &)
-  else
-    local win; win="$(terminal_run "$dir/run.sh")" || die "cannot start Terminal.app"
-    printf '%s\n' "$win" > "$dir/window"
-  fi
-  local i=0
-  while [[ ! -s "$dir/pid" ]] && (( i < 100 )); do sleep 0.1; i=$((i+1)); done
-  [[ -s "$dir/pid" ]] || die "the capture did not start"
-  cat "$dir/pid"
-}
-
+# Default GIF scale: shrink recorded pixels back to on-screen points.
+# The ratio between the target width in points and the video width in pixels
+# is the backing scale of the display that was recorded.
 default_scale() {
-  if [[ -n "$SCALE" ]]; then echo "$SCALE"; return; fi
-  local bs; bs="$(backing_scale 2>/dev/null || echo 1)"
-  awk -v b="$bs" 'BEGIN { printf "%.4f", 1/b }'
+  if [[ -n "$SCALE" ]]; then printf '%s\n' "$SCALE"; return; fi
+  local mov="$1" rect="${2:-}" vw pw
+  vw="$(video_width "$mov")"
+  pw="$(printf '%s' "$rect" | cut -d, -f3)"
+  if [[ -n "$vw" && -n "$pw" ]] && (( pw > 0 && vw > 0 )); then
+    awk -v v="$vw" -v p="$pw" 'BEGIN { s = p / v; if (s > 1) s = 1; printf "%.4f", s }'
+  else
+    echo 1
+  fi
 }
 
+# Normalizes OUT: default location, .gif extension, parent directory exists.
+resolve_out() {
+  if [[ -z "$OUT" ]]; then
+    mkdir -p "$OUT_DIR"; OUT="$OUT_DIR/gififier-$(timestamp).gif"
+  fi
+  [[ "$OUT" == *.gif ]] || OUT="$OUT.gif"
+  mkdir -p "$(dirname "$OUT")"
+}
+
+# finish_recording <mov> <out.gif> <rect>
 finish_recording() {
-  # finish_recording <mov> <out.gif>
-  local mov="$1" out="$2"
-  [[ -s "$mov" ]] || die "no video was produced ($mov). Is Screen Recording allowed for $(host_app)?"
-  local scale; scale="$(default_scale)"
-  encode_gif "$mov" "$out" "$FPS" "$scale" "$WIDTH" "$MP4"
+  local mov="$1" out="$2" rect="${3:-}"
+  [[ -s "$mov" ]] || die "no video was produced. Is Screen Recording allowed for $(host_app)? Run: gififier doctor"
+  local scale; scale="$(default_scale "$mov" "$rect")"
+  local keep; keep="$(sibling_path "$out" mov)"
+  if ! encode_gif "$mov" "$out" "$FPS" "$scale" "$WIDTH" "$MP4"; then
+    mv "$mov" "$keep"
+    die "encoding failed. The recording is kept at $keep (try: gififier convert)"
+  fi
   if [[ "$KEEP_VIDEO" == 1 ]]; then
-    mv "$mov" "${out%.*}.mov"
+    mv "$mov" "$keep"; chmod 644 "$keep"
+    log "kept $keep ($(file_size "$keep"))"
   else
     rm -f "$mov"
   fi
-  local size; size="$(du -h "$out" | cut -f1 | tr -d ' ')"
-  log "wrote $out ($size)"
+  log "wrote $out ($(file_size "$out"))"
   printf '%s\n' "$out"
 }
 
 cmd_record() {
   parse_target_and_opts "$@"
+  resolve_out
   check_capture_ready
   resolve_target
-  [[ -n "$OUT" ]] || OUT="./gififier-$(timestamp).gif"
-  local mov; mov="$(mktemp -t gififier).mov"; rm -f "$mov"
+  local mov; mov="$TMP_DIR/recording.mov"
   if (( DELAY > 0 )); then log "starting in ${DELAY}s..."; sleep "$DELAY"; fi
   log "recording $CAPTURE_DESC for ${DURATION}s"
   run_capture "$mov" -V "$DURATION" ${CAPTURE_ARGS[@]+"${CAPTURE_ARGS[@]}"}
-  finish_recording "$mov" "$OUT"
+  finish_recording "$mov" "$OUT" "$CAPTURE_RECT"
 }
 
 cmd_start() {
   parse_target_and_opts "$@"
+  mkdir -p "$STATE_DIR"
+  if [[ -d "$STATE_DIR/capture" ]]; then
+    if [[ -s "$STATE_DIR/capture/pid" ]] && kill -0 "$(cat "$STATE_DIR/capture/pid")" 2>/dev/null; then
+      die "a recording is already running (gififier stop)"
+    fi
+    cleanup_capture_dir "$STATE_DIR/capture"; rm -rf "$STATE_DIR/capture"
+  fi
   check_capture_ready
   resolve_target
-  mkdir -p "$STATE_DIR"
-  [[ -f "$STATE_DIR/pid" ]] && kill -0 "$(cat "$STATE_DIR/pid")" 2>/dev/null && die "a recording is already running (gififier stop)"
-  local mov="$STATE_DIR/recording-$(timestamp).mov"
+  local dir="$STATE_DIR/capture"; mkdir -p "$dir"
+  printf 'FPS=%q\nSCALE=%q\nWIDTH=%q\nKEEP_VIDEO=%q\nMP4=%q\nOUT=%q\nCAPTURE_RECT=%q\n' \
+    "$FPS" "$SCALE" "$WIDTH" "$KEEP_VIDEO" "$MP4" "$OUT" "$CAPTURE_RECT" > "$dir/opts"
   if (( DELAY > 0 )); then log "starting in ${DELAY}s..."; sleep "$DELAY"; fi
-  local pid; pid="$(start_capture "$mov" ${CAPTURE_ARGS[@]+"${CAPTURE_ARGS[@]}"})"
+  write_capture_script "$dir" bg "$dir/recording.mov" ${CAPTURE_ARGS[@]+"${CAPTURE_ARGS[@]}"}
+  launch_capture_script "$dir"
+  if ! wait_for_file "$dir/pid" 100; then
+    cleanup_capture_dir "$dir"; rm -rf "$dir"; die "the capture did not start. Run: gififier doctor"
+  fi
   sleep 0.5
-  kill -0 "$pid" 2>/dev/null || die "screencapture exited immediately. Run: gififier doctor"
-  printf '%s\n' "$pid" > "$STATE_DIR/pid"
-  printf '%s\n' "$mov" > "$STATE_DIR/mov"
-  printf 'FPS=%q\nSCALE=%q\nWIDTH=%q\nKEEP_VIDEO=%q\nMP4=%q\nOUT=%q\n' \
-    "$FPS" "$SCALE" "$WIDTH" "$KEEP_VIDEO" "$MP4" "$OUT" > "$STATE_DIR/opts"
-  log "recording $CAPTURE_DESC (pid $pid). Stop with: gififier stop -o proof.gif"
+  if ! kill -0 "$(cat "$dir/pid")" 2>/dev/null; then
+    log "$(capture_error_text "$dir")"
+    cleanup_capture_dir "$dir"; rm -rf "$dir"
+    die "screencapture exited immediately. Run: gififier doctor"
+  fi
+  log "recording $CAPTURE_DESC (pid $(cat "$dir/pid")). Stop with: gififier stop -o proof.gif"
 }
 
 cmd_stop() {
-  [[ -f "$STATE_DIR/pid" ]] || die "no recording in progress"
-  local pid mov; pid="$(cat "$STATE_DIR/pid")"; mov="$(cat "$STATE_DIR/mov")"
+  local dir="$STATE_DIR/capture"
+  [[ -d "$dir" ]] || die "no recording in progress"
+  wait_for_file "$dir/pid" 50 || { cleanup_capture_dir "$dir"; rm -rf "$dir"; die "the recording never started"; }
   # shellcheck disable=SC1091
-  source "$STATE_DIR/opts"
-  # stop-time overrides
+  source "$dir/opts"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -o|--out)     OUT="$2"; shift 2 ;;
-      --fps)        FPS="$2"; shift 2 ;;
-      --scale)      SCALE="$2"; shift 2 ;;
-      --width)      WIDTH="$2"; shift 2 ;;
+      -o|--out)     optval "$1" $#; OUT="$2"; shift 2 ;;
+      --fps)        optval "$1" $#; FPS="$2"; shift 2 ;;
+      --scale)      optval "$1" $#; SCALE="$2"; shift 2 ;;
+      --width)      optval "$1" $#; WIDTH="$2"; shift 2 ;;
       --keep-video) KEEP_VIDEO=1; shift ;;
       --mp4)        MP4=1; shift ;;
       *) die "unknown option: $1" ;;
     esac
   done
-  [[ -n "$OUT" ]] || OUT="./gififier-$(timestamp).gif"
+  validate_encode_opts
+  resolve_out
+  local pid; pid="$(cat "$dir/pid")"
   if kill -0 "$pid" 2>/dev/null; then
     kill -INT "$pid" 2>/dev/null || true
     local i=0
     while kill -0 "$pid" 2>/dev/null && (( i < 100 )); do sleep 0.1; i=$((i+1)); done
-    kill -0 "$pid" 2>/dev/null && { kill -TERM "$pid" 2>/dev/null || true; sleep 1; }
+    if kill -0 "$pid" 2>/dev/null; then kill -TERM "$pid" 2>/dev/null || true; sleep 1; fi
   fi
-  rm -f "$STATE_DIR/pid" "$STATE_DIR/opts"
-  if [[ -f "$STATE_DIR/capture/sleep.pid" ]]; then kill "$(cat "$STATE_DIR/capture/sleep.pid")" 2>/dev/null || true; fi
-  if [[ -f "$STATE_DIR/capture/window" ]]; then terminal_close "$(cat "$STATE_DIR/capture/window")"; fi
-  rm -rf "$STATE_DIR/capture"
-  # screencapture may take a moment to finalize the file
-  local i=0
-  while [[ ! -s "$mov" ]] && (( i < 30 )); do sleep 0.1; i=$((i+1)); done
-  finish_recording "$mov" "$OUT"
-  rm -f "$STATE_DIR/mov"
+  wait_for_file "$dir/done" 30 || true
+  cleanup_capture_dir "$dir"
+  local mov; mov="$TMP_DIR/recording.mov"
+  if [[ -s "$dir/recording.mov" ]]; then
+    mv "$dir/recording.mov" "$mov"
+  else
+    log "$(capture_error_text "$dir")"
+  fi
+  rm -rf "$dir"
+  finish_recording "$mov" "$OUT" "$CAPTURE_RECT"
 }
 
 cmd_convert() {
@@ -398,43 +519,50 @@ cmd_convert() {
   OUT=""; FPS="$DEFAULT_FPS"; SCALE=""; WIDTH=""; MP4=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -o|--out) OUT="$2"; shift 2 ;;
-      --fps)    FPS="$2"; shift 2 ;;
-      --scale)  SCALE="$2"; shift 2 ;;
-      --width)  WIDTH="$2"; shift 2 ;;
+      -o|--out) optval "$1" $#; OUT="$2"; shift 2 ;;
+      --fps)    optval "$1" $#; FPS="$2"; shift 2 ;;
+      --scale)  optval "$1" $#; SCALE="$2"; shift 2 ;;
+      --width)  optval "$1" $#; WIDTH="$2"; shift 2 ;;
       --mp4)    MP4=1; shift ;;
       *) die "unknown option: $1" ;;
     esac
   done
-  [[ -n "$OUT" ]] || OUT="${in%.*}.gif"
-  local scale; scale="$(default_scale)"
-  encode_gif "$in" "$OUT" "$FPS" "$scale" "$WIDTH" "$MP4"
-  log "wrote $OUT ($(du -h "$OUT" | cut -f1 | tr -d ' '))"
+  validate_encode_opts
+  [[ -n "$OUT" ]] || OUT="$(sibling_path "$in" gif)"
+  resolve_out
+  encode_gif "$in" "$OUT" "$FPS" "${SCALE:-1}" "$WIDTH" "$MP4" || die "encoding failed"
+  log "wrote $OUT ($(file_size "$OUT"))"
   printf '%s\n' "$OUT"
 }
 
 cmd_windows() {
-  ensure_helper
+  check_capture_ready
   printf 'ID\tAPP\tTITLE\tX,Y,W,H\n'
-  "$HELPER" list | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $1, $3, $4, $5 }'
+  list_windows | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $1, $3, $4, $5 }'
 }
 
 # ---------------------------------------------------------------- attach ----
 
 # Creates an orphan branch that only holds assets, if it does not exist yet.
 ensure_asset_branch() {
-  local repo="$1" branch="$2"
-  if gh api "repos/$repo/git/ref/heads/$branch" >/dev/null 2>&1; then return 0; fi
+  local repo="$1" branch="$2" err
+  if err="$(gh api "repos/$repo/git/ref/heads/$branch" 2>&1 >/dev/null)"; then return 0; fi
+  [[ "$err" == *"HTTP 404"* ]] || die "cannot read $repo: $err"
   log "creating asset branch '$branch' in $repo"
   local blob tree commit
   blob="$(gh api -X POST "repos/$repo/git/blobs" -f content="# gififier assets
 Screen recordings attached to pull requests by gififier. Safe to leave alone.
-" -f encoding=utf-8 --jq .sha)"
+" -f encoding=utf-8 --jq .sha)" || die "cannot create blob in $repo"
   tree="$(gh api -X POST "repos/$repo/git/trees" \
-    --input <(printf '{"tree":[{"path":"README.md","mode":"100644","type":"blob","sha":"%s"}]}' "$blob") --jq .sha)"
+    --input <(printf '{"tree":[{"path":"README.md","mode":"100644","type":"blob","sha":"%s"}]}' "$blob") --jq .sha)" || die "cannot create tree"
   commit="$(gh api -X POST "repos/$repo/git/commits" \
-    --input <(printf '{"message":"Initialize gififier assets branch","tree":"%s","parents":[]}' "$tree") --jq .sha)"
-  gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$commit" >/dev/null
+    --input <(printf '{"message":"Initialize gififier assets branch","tree":"%s","parents":[]}' "$tree") --jq .sha)" || die "cannot create commit"
+  gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$commit" >/dev/null || die "cannot create branch $branch"
+}
+
+# safe_name <text>: keeps only [A-Za-z0-9._-], trims and collapses dashes.
+safe_name() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed 's/--*/-/g;s/^-*//;s/-*$//'
 }
 
 cmd_attach() {
@@ -445,57 +573,57 @@ cmd_attach() {
   local pr="" repo="" branch="$DEFAULT_ASSET_BRANCH" message="" mode="comment"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --pr)         pr="$2"; shift 2 ;;
-      --repo)       repo="$2"; shift 2 ;;
-      --branch)     branch="$2"; shift 2 ;;
-      --message)    message="$2"; shift 2 ;;
+      --pr)         optval "$1" $#; pr="$2"; shift 2 ;;
+      --repo)       optval "$1" $#; repo="$2"; shift 2 ;;
+      --branch)     optval "$1" $#; branch="$2"; shift 2 ;;
+      --message)    optval "$1" $#; message="$2"; shift 2 ;;
       --body)       mode="body"; shift ;;
       --no-comment) mode="none"; shift ;;
       *) die "unknown option: $1" ;;
     esac
   done
-  [[ -n "$repo" ]] || repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || die "not in a GitHub repo (use --repo)"
+  [[ -z "$pr" ]] || is_uint "$pr" || die "--pr must be a number"
+  [[ -n "$repo" ]] || repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || die "not in a GitHub repo (use --repo)"
   if [[ "$mode" != none && -z "$pr" ]]; then
-    pr="$(gh pr view --json number --jq .number 2>/dev/null || true)"
-    [[ -n "$pr" ]] || die "no PR found for the current branch (use --pr N or --no-comment)"
+    pr="$(gh pr view --repo "$repo" --json number --jq .number 2>/dev/null || true)"
+    [[ -n "$pr" ]] || die "no PR found for the current branch (use --pr N, or --no-comment to only upload)"
   fi
 
   ensure_asset_branch "$repo" "$branch"
 
-  local src_branch slug base path
+  local src_branch slug base ext stem path
   src_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo misc)"
-  slug="$(printf '%s' "$src_branch" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//')"
+  slug="$(safe_name "$src_branch")"; slug="${slug:-misc}"
   base="$(basename "$file")"
-  path="${slug:-misc}/$(timestamp)-${base// /-}"
+  ext="${base##*.}"; [[ "$ext" != "$base" ]] || ext="bin"
+  stem="$(safe_name "${base%.*}")"; stem="${stem:-file}"
+  path="$slug/$(timestamp)-$$-${stem}.$(safe_name "$ext")"
 
   log "uploading $file to $repo@$branch:$path"
-  local payload; payload="$(mktemp -t gififier).json"
+  local payload; payload="$TMP_DIR/payload.json"
   {
     printf '{"message":"Add %s","branch":"%s","content":"' "$path" "$branch"
     base64 -i "$file" | tr -d '\n'
     printf '"}'
   } > "$payload"
   gh api -X PUT "repos/$repo/contents/$path" --input "$payload" >/dev/null || die "upload failed"
-  rm -f "$payload"
 
   local url="https://github.com/$repo/blob/$branch/$path?raw=true"
-  local md
-  md="$(printf '%s\n\n![%s](%s)' "$message" "$base" "$url")"
-  [[ -z "$message" ]] && md="![$base]($url)"
+  local md="![$stem.$ext]($url)"
+  [[ -z "$message" ]] || md="$(printf '%s\n\n%s' "$message" "$md")"
 
   case "$mode" in
-    none)
-      printf '%s\n' "$url" ;;
+    none) ;;
     comment)
-      gh pr comment "$pr" --repo "$repo" --body "$md" >/dev/null
-      log "commented on PR #$pr"
-      printf '%s\n' "$url" ;;
+      gh pr comment "$pr" --repo "$repo" --body "$md" >/dev/null || die "cannot comment on PR #$pr"
+      log "commented on PR #$pr" ;;
     body)
       local body; body="$(gh pr view "$pr" --repo "$repo" --json body --jq .body)"
-      gh pr edit "$pr" --repo "$repo" --body "$(printf '%s\n\n%s\n' "$body" "$md")" >/dev/null
-      log "appended to PR #$pr description"
-      printf '%s\n' "$url" ;;
+      [[ -z "$body" ]] || body="$(printf '%s\n\n' "$body")"
+      gh pr edit "$pr" --repo "$repo" --body "${body}${md}" >/dev/null || die "cannot edit PR #$pr"
+      log "appended to PR #$pr description" ;;
   esac
+  printf '%s\n' "$url"
 }
 
 # ---------------------------------------------------------------- doctor ----
@@ -508,21 +636,31 @@ cmd_doctor() {
   }
   check "ffmpeg installed (brew install ffmpeg)" command -v ffmpeg
   check "screencapture available" command -v screencapture
-  check "swiftc available (xcode-select --install)" command -v swiftc
   check "gh installed (brew install gh)" command -v gh
   check "gh authenticated (gh auth login)" gh auth status
+  if (ensure_helper) >/dev/null 2>&1; then
+    log "ok    window helper compiled ($HELPER)"
+  else
+    ok=0; log "FAIL  window helper: swiftc is required once (xcode-select --install)"
+  fi
+  rm -f "$VIA_CACHE"
+  local app; app="$(host_app)"
   if has_screen_permission; then
-    log "ok    Screen Recording permission for $(host_app)"
+    log "ok    Screen Recording permission for $app"
   elif terminal_has_permission; then
-    log "ok    Screen Recording permission via Terminal.app ($(host_app) lacks it; captures run in a Terminal window)"
+    log "ok    Screen Recording permission via Terminal.app"
+    log "      $app lacks it, so captures run inside a minimized Terminal window (about 1s slower)."
+    log "      To record directly, grant Screen Recording to $app and restart it."
   else
     ok=0
-    log "FAIL  Screen Recording permission for: $(host_app)"
-    log "      Open System Settings > Privacy & Security > Screen & System Audio Recording,"
-    log "      enable that application, then restart it."
+    log "FAIL  Screen Recording permission for $app (and Terminal.app cannot be used)"
+    [[ -z "$OSASCRIPT_ERROR" ]] || log "      Terminal.app control failed: $OSASCRIPT_ERROR"
+    log "      Grant Screen Recording to $app in System Settings > Privacy & Security >"
+    log "      Screen & System Audio Recording, then restart it. Alternatively allow $app to"
+    log "      control Terminal.app (Privacy & Security > Automation) and grant Terminal.app"
+    log "      Screen Recording."
     log "      Shortcut: open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'"
   fi
-  if ensure_helper 2>/dev/null; then log "ok    window helper compiled ($HELPER)"; else ok=0; log "FAIL  window helper"; fi
   (( ok )) && log "all checks passed" || exit 1
 }
 

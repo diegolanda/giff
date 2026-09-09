@@ -1,4 +1,5 @@
 *.gif
+/windows
 *.mov
 *.mp4
 .DS_Store

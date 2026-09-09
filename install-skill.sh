@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the gififier agent skill for one or more harnesses.
 #
-#   ./install-skill.sh <harness> [--project DIR] [--copy]
+#   ./install-skill.sh <harness> [--project DIR] [--copy] [--force]
 #
 # harness:  claude   -> ~/.claude/skills/gififier/            (or DIR/.claude/skills/gififier/)
 #           codex    -> ~/.codex/skills/gififier/             (or DIR/.codex/skills/gififier/)
@@ -18,11 +18,12 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src_dir="$here/skills/gififier"
 src="$src_dir/SKILL.md"
-project="" copy=0 harness=""
+project="" copy=0 force=0 harness=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) project="$(cd "$2" && pwd)"; shift 2 ;;
     --copy) copy=1; shift ;;
+    --force) force=1; shift ;;
     -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) harness="$1"; shift ;;
   esac
@@ -32,10 +33,20 @@ done
 body() { awk 'BEGIN{fm=0} /^---$/ && fm<2 {fm++; next} fm>=2 {print}' "$src"; }
 description() { awk -F': ' '/^description:/ {sub(/^description: /, ""); print; exit}' "$src"; }
 
-place_dir() { # place_dir <target dir>
+# place_dir <target dir>: replaces a previous gififier install. Refuses to remove a
+# directory that this tool did not create unless --force is given.
+place_dir() {
   local target="$1"
   mkdir -p "$(dirname "$target")"
-  rm -rf "$target"
+  if [[ -L "$target" ]]; then
+    rm -f "$target"
+  elif [[ -e "$target" ]]; then
+    if (( force )) || grep -qs '^name: gififier$' "$target/SKILL.md"; then
+      rm -rf "$target"
+    else
+      echo "refusing to replace $target: it was not installed by gififier (use --force)"; return 1
+    fi
+  fi
   if (( copy )); then cp -R "$src_dir" "$target"; else ln -s "$src_dir" "$target"; fi
   echo "installed $target"
 }
@@ -58,11 +69,21 @@ install_one() {
       echo "installed $f" ;;
     agents)
       [[ -n "$project" ]] || { echo "agents needs --project DIR"; return 1; }
-      local f="$project/AGENTS.md"
+      local f="$project/AGENTS.md" section
+      section="$(printf '<!-- gififier:start -->\n'; body; printf '<!-- gififier:end -->')"
       if [[ -f "$f" ]] && grep -q '<!-- gififier:start -->' "$f"; then
-        awk '/<!-- gififier:start -->/{skip=1} !skip{print} /<!-- gififier:end -->/{skip=0}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        grep -q '<!-- gififier:end -->' "$f" || { echo "$f has a gififier start marker but no end marker. Fix the file first."; return 1; }
+        # Replace the block in place. BSD awk cannot take newlines in -v, so read a file.
+        local sec; sec="$(mktemp -t gififier-section)"
+        printf '%s\n' "$section" > "$sec"
+        awk -v sec="$sec" '
+          /<!-- gififier:start -->/ { while ((getline line < sec) > 0) print line; skip=1; next }
+          /<!-- gififier:end -->/ { skip=0; next }
+          !skip { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        rm -f "$sec"
+      else
+        { if [[ -s "$f" ]]; then printf '\n'; fi; printf '%s\n' "$section"; } >> "$f"
       fi
-      { [[ ! -s "$f" ]] || printf '\n'; printf '<!-- gififier:start -->\n'; body; printf '<!-- gififier:end -->\n'; } >> "$f"
       echo "installed section in $f" ;;
     all)
       install_one claude; install_one codex

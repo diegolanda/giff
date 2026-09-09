@@ -27,7 +27,8 @@ the GIF and prints its path. You decide how to share it.
 5. Check that the GIF is under a few MB. If it is large, re-encode the kept video:
    `gififier convert "${gif%.gif}.mov" --width 800 --fps 8 -o "$gif"`.
 6. Share it in the PR. One verified way is `examples/attach-to-pr.sh "$gif" --message
-   "<what the recording shows>"` from the gififier repo, which uploads the file to an
+   "<what the recording shows>"` from the gififier checkout (Homebrew: under
+   `$(brew --prefix)/opt/gififier/libexec`), which uploads the file to an
    orphan `gififier-assets` branch and comments on the PR of the current branch. Any
    other method is fine, for example a dedicated screenshots branch or an external host.
    Do not commit the GIF to the source branch.

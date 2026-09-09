@@ -2,7 +2,7 @@
 # update url and sha256 for each release:
 #   curl -L https://github.com/diegolanda/gififier/archive/refs/tags/v0.2.0.tar.gz | shasum -a 256
 class Gififier < Formula
-  desc "LICEcap for the command line: record a window, region, or screen to GIF on macOS"
+  desc "Record a window, region, or screen to GIF on macOS"
   homepage "https://github.com/diegolanda/gififier"
   url "https://github.com/diegolanda/gififier/archive/refs/tags/v0.2.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
@@ -13,7 +13,7 @@ class Gififier < Formula
 
   def install
     system "swiftc", "-O", "-o", "windows", "helpers/windows.swift"
-    libexec.install "windows"
+    (libexec/"libexec").install "windows"
     libexec.install "helpers"
     (libexec/"bin").install "bin/gififier"
     (libexec/"skills").install Dir["skills/*"]
@@ -25,7 +25,8 @@ class Gififier < Formula
     <<~EOS
       Screen Recording permission is required for the app that runs your terminal.
       Run `gififier doctor --fix` to request it.
-      Install the agent skill with: #{libexec}/install-skill.sh claude
+      Example PR upload script: #{opt_libexec}/examples/attach-to-pr.sh
+      Install the agent skill with: #{opt_libexec}/install-skill.sh claude
     EOS
   end
 

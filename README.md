@@ -36,11 +36,16 @@ git clone https://github.com/diegolanda/gififier.git
 cd gififier && ./install.sh
 ```
 
-Every route ends with `gififier doctor --fix`, which installs ffmpeg through Homebrew,
-starts the Xcode Command Line Tools installer if `swiftc` is missing, and asks macOS
-for the Screen Recording permission. See the permission section below.
+The installer script ends with `gififier doctor --fix`, which installs ffmpeg through
+Homebrew, starts the Xcode Command Line Tools installer if `swiftc` is missing, and
+asks macOS for the Screen Recording permission. Pass `--no-fix` to only report. After a
+Homebrew install, run `gififier doctor --fix` yourself. See the permission section below.
 
-Uninstall with `./uninstall.sh` (add `--purge` to remove `~/.cache/gififier`).
+Installer options work on the curl route too: `curl ... | bash -s -- --skill claude`.
+
+Uninstall with `./uninstall.sh` from the checkout (`~/.gififier/uninstall.sh` for the
+curl route). Add `--purge` to remove `~/.cache/gififier`. Copied or generated skill
+files stay in place.
 
 ## Requirements
 
@@ -130,7 +135,10 @@ updates apply without reinstalling. Pass `--copy` for a copy instead. Cursor and
 get a generated file with the same body and their own frontmatter. The `AGENTS.md`
 section is wrapped in markers and replaced on reinstall.
 
-`install.sh --skill claude` does the tool and the skill in one step.
+`install.sh --skill claude` does the tool and the skill in one step. The installer never
+replaces a skill directory it did not create unless you pass `--force`.
+
+Homebrew installs keep these scripts under `$(brew --prefix)/opt/gififier/libexec`.
 
 ## Posting a GIF on a pull request
 

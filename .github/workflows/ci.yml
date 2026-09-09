@@ -1,5 +1,10 @@
 name: ci
 on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: macos-latest
@@ -21,9 +26,13 @@ jobs:
           test -s out.gif
       - name: Skill install renders every harness
         run: |
-          mkdir -p /tmp/proj
-          HOME=/tmp/home ./install-skill.sh all --project /tmp/proj --copy
+          mkdir -p /tmp/proj /tmp/home
+          ./install-skill.sh all --project /tmp/proj --copy
+          ./install-skill.sh all --project /tmp/proj --copy   # idempotent
+          test -f /tmp/proj/.claude/skills/gififier/SKILL.md
+          test -f /tmp/proj/.codex/skills/gififier/SKILL.md
+          HOME=/tmp/home ./install-skill.sh claude
           test -f /tmp/home/.claude/skills/gififier/SKILL.md
           test -f /tmp/proj/.cursor/rules/gififier.mdc
           test -f /tmp/proj/.github/instructions/gififier.instructions.md
-          grep -q 'gififier:start' /tmp/proj/AGENTS.md
+          test "$(grep -c 'gififier:start' /tmp/proj/AGENTS.md)" = 1

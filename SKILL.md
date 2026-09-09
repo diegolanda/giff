@@ -18,19 +18,21 @@ Use `gififier` to record visual proof of a frontend change and attach it to the 
 1. Find the browser window: `gififier windows`. Pick the id whose title matches the page.
 2. Start the recording: `gififier start -i <id>` (or `-w "Google Chrome"`).
 3. Drive the UI through the change you want to show. Keep it under 15 seconds.
-4. Stop and encode: `gififier stop -o proof.gif`. The GIF path is printed on stdout.
-5. Check that the file is under a few MB. Use `--width 800` or `--fps 8` if it is large.
-6. Attach it: `gififier attach proof.gif --message "<what the recording shows>"`.
+4. Stop and encode: `gif=$(gififier stop --keep-video)`. The GIF path is printed on
+   stdout. Without `-o`, files go to `~/.cache/gififier/out`, outside the project.
+5. Check that the GIF is under a few MB. If it is large, re-encode the kept video:
+   `gififier convert "${gif%.gif}.mov" --width 800 --fps 8 -o "$gif"`.
+6. Attach it: `gififier attach "$gif" --message "<what the recording shows>"`.
    The current branch must have an open PR. Create the PR first with `gh pr create`,
    or pass `--pr <n>`.
 
-For a short fixed clip, use one command: `gififier record -i <id> -d 6 -o proof.gif`.
+For a short fixed clip, use one command: `gif=$(gififier record -i <id> -d 6)`.
 
 ## Notes
 
-- The default output directory is `~/.cache/gififier/out`. With `-o`, do not write the
-  GIF inside the project unless it is ignored by git. `attach` stores the file on the
-  `gififier-assets` branch, so GIFs never need to be committed.
+- Do not write GIFs inside the project with `-o` unless the path is ignored by git.
+  `attach` stores the file on the `gififier-assets` branch, so GIFs never need to be
+  committed.
 - `attach` prints the image URL. Use `--body` to put the image in the PR description
   instead of a comment.
 - Never leave a recording running. `gififier stop` also cleans up state.

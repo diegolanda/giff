@@ -145,7 +145,7 @@ is_num()  { [[ "$1" =~ ^[0-9]*\.?[0-9]+$ ]]; }
 optval() { (( $2 >= 2 )) || die "option $1 needs a value"; }
 
 has_screen_permission() {
-  if (ensure_helper) >/dev/null 2>&1; then
+  if (ensure_helper) 2>&1 >/dev/null | grep -v '^gififier:' >&2; [[ -x "$HELPER" ]]; then
     "$HELPER" preflight >/dev/null 2>&1
     return
   fi
@@ -289,7 +289,8 @@ run_capture() {
   local mov="$1"; shift
   local dir; dir="$TMP_DIR/capture"; mkdir -p "$dir"
   write_capture_script "$dir" once "$mov" "$@"
-  trap 'cleanup_capture_dir "$TMP_DIR/capture"; rm -rf "$TMP_DIR"; exit 130' INT TERM
+  trap 'cleanup_capture_dir "$TMP_DIR/capture"; rm -rf "$TMP_DIR"; exit 130' INT
+  trap 'cleanup_capture_dir "$TMP_DIR/capture"; rm -rf "$TMP_DIR"; exit 143' TERM
   launch_capture_script "$dir"
   if ! wait_for_file "$dir/done" $(( (DURATION + 20) * 10 )); then
     cleanup_capture_dir "$dir"; die "capture timed out"
@@ -376,7 +377,8 @@ parse_target_and_opts() {
 validate_encode_opts() {
   is_uint "$FPS" && (( FPS > 0 )) || die "--fps must be a positive whole number"
   [[ -z "$SCALE" ]] || { is_num "$SCALE" && awk -v s="$SCALE" 'BEGIN { exit !(s > 0) }'; } || die "--scale must be a number greater than 0"
-  [[ -z "$WIDTH" ]] || is_uint "$WIDTH" || die "--width must be a whole number of pixels"
+  [[ -z "$WIDTH" ]] || { is_uint "$WIDTH" && (( WIDTH > 0 )); } || die "--width must be a positive whole number of pixels"
+  [[ -z "$WIDTH" || -z "$SCALE" ]] || die "use either --width or --scale, not both"
 }
 
 # Sets CAPTURE_ARGS (array), CAPTURE_RECT (x,y,w,h in points) and CAPTURE_DESC.
@@ -448,8 +450,8 @@ finish_recording() {
 }
 
 cmd_record() {
-  need ffmpeg "brew install ffmpeg"
   parse_target_and_opts "$@"
+  need ffmpeg "brew install ffmpeg"
   resolve_out
   check_capture_ready
   resolve_target
@@ -461,8 +463,8 @@ cmd_record() {
 }
 
 cmd_start() {
-  need ffmpeg "brew install ffmpeg"
   parse_target_and_opts "$@"
+  need ffmpeg "brew install ffmpeg"
   mkdir -p "$STATE_DIR"
   if [[ -d "$STATE_DIR/capture" ]]; then
     if [[ -s "$STATE_DIR/capture/pid" ]] && kill -0 "$(cat "$STATE_DIR/capture/pid")" 2>/dev/null; then
@@ -491,7 +493,6 @@ cmd_start() {
 }
 
 cmd_stop() {
-  need ffmpeg "brew install ffmpeg"
   local dir="$STATE_DIR/capture"
   [[ -d "$dir" ]] || die "no recording in progress"
   wait_for_file "$dir/pid" 50 || { cleanup_capture_dir "$dir"; rm -rf "$dir"; die "the recording never started"; }
@@ -554,11 +555,11 @@ cmd_convert() {
 }
 
 cmd_windows() {
-  if ! (check_capture_ready) 2>/dev/null; then
-    CAPTURE_VIA=none
+  local route
+  route="$( (check_capture_ready 2>/dev/null && printf '%s\n' "$CAPTURE_VIA") || true )"
+  CAPTURE_VIA="${route:-none}"
+  if [[ "$CAPTURE_VIA" == none ]]; then
     log "note: no Screen Recording permission, so window titles are empty (run: gififier doctor)"
-  else
-    check_capture_ready 2>/dev/null
   fi
   printf 'ID\tAPP\tTITLE\tX,Y,W,H\n'
   list_windows | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $1, $3, $4, $5 }'
@@ -607,6 +608,7 @@ cmd_attach() {
   done
   [[ -z "$pr" ]] || is_uint "$pr" || die "--pr must be a number"
   local src_branch; src_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [[ "$src_branch" != HEAD ]] || src_branch=""
   [[ -n "$repo" ]] || repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || die "not in a GitHub repo (use --repo)"
   gh api "repos/$repo" >/dev/null 2>&1 || die "repository not found or not accessible: $repo"
   if [[ "$mode" != none && -z "$pr" ]]; then

@@ -40,14 +40,17 @@ Usage:
   gififier convert <in.mov> [-o out.gif]  Convert an existing video to GIF
   gififier attach  <file.gif> [options]   Upload the file and post it on a PR
   gififier windows                        List on-screen windows (id, app, title, bounds)
+  gififier screens                        List displays (number, bounds, scale)
   gififier doctor                         Check dependencies and permissions
 
 Target (pick one, default is the main screen):
   -w, --window <app or title>   Record the first window whose app name or title
                                 contains this text (case-insensitive)
   -i, --window-id <id>          Record the window with this id (see: gififier windows)
-  -r, --region <x,y,w,h>        Record this screen rectangle (points, top-left origin)
+  -r, --region <x,y,w,h>        Record this screen rectangle (points, top-left origin,
+                                global coordinates, so it can lie on any display)
       --screen                  Record the whole main screen
+      --display <n>             Record display n (1 is the main display, see: gififier screens)
 
 Recording options:
   -d, --duration <sec>          Seconds to record (record only, default 5)
@@ -111,11 +114,15 @@ list_windows() {
   fi
 }
 
-main_screen_rect() {
+# display_rect <n>: x,y,w,h of display n (1 = main) in points.
+display_rect() {
   ensure_helper
-  local f; f="$("$HELPER" screens | head -1 | cut -f2)"
-  printf '0,0,%s\n' "${f#*,*,}"
+  local f; f="$("$HELPER" screens | awk -F'\t' -v n="$1" '$1==n-1 {print $2; exit}')"
+  [[ -n "$f" ]] || return 1
+  printf '%s\n' "$f"
 }
+
+main_screen_rect() { display_rect 1; }
 
 # Prints "id<TAB>x,y,w,h" for the first window matching an app name or title.
 find_window() {
@@ -350,6 +357,7 @@ parse_target_and_opts() {
       -i|--window-id)  optval "$1" $#; TARGET_MODE="window-id"; TARGET_ARG="$2"; shift 2 ;;
       -r|--region)     optval "$1" $#; TARGET_MODE="region";    TARGET_ARG="$2"; shift 2 ;;
       --screen)        TARGET_MODE="screen"; shift ;;
+      --display)       optval "$1" $#; TARGET_MODE="display"; TARGET_ARG="$2"; shift 2 ;;
       -d|--duration)   optval "$1" $#; DURATION="$2"; shift 2 ;;
       --delay)         optval "$1" $#; DELAY="$2"; shift 2 ;;
       -o|--out)        optval "$1" $#; OUT="$2"; shift 2 ;;
@@ -368,6 +376,7 @@ parse_target_and_opts() {
   is_uint "$DURATION" && (( DURATION > 0 )) || die "--duration must be a whole number of seconds"
   is_uint "$DELAY" || die "--delay must be a whole number of seconds"
   if [[ "$TARGET_MODE" == window && -z "$TARGET_ARG" ]]; then die "--window needs an app name or title"; fi
+  if [[ "$TARGET_MODE" == display ]]; then is_uint "$TARGET_ARG" && (( TARGET_ARG > 0 )) || die "--display must be 1 or higher"; fi
   if [[ "$TARGET_MODE" == window-id ]]; then is_uint "$TARGET_ARG" || die "--window-id must be a number"; fi
   if [[ "$TARGET_MODE" == region ]]; then
     [[ "$TARGET_ARG" =~ ^-?[0-9]+,-?[0-9]+,[0-9]+,[0-9]+$ ]] || die "region must be x,y,w,h"
@@ -387,6 +396,9 @@ resolve_target() {
   case "$TARGET_MODE" in
     screen)
       CAPTURE_RECT="$(main_screen_rect)"; CAPTURE_DESC="main screen" ;;
+    display)
+      CAPTURE_RECT="$(display_rect "$TARGET_ARG")" || die "display $TARGET_ARG not found (try: gififier screens)"
+      CAPTURE_ARGS=(-D "$TARGET_ARG"); CAPTURE_DESC="display $TARGET_ARG at $CAPTURE_RECT" ;;
     region)
       CAPTURE_ARGS=(-R "$TARGET_ARG"); CAPTURE_RECT="$TARGET_ARG"; CAPTURE_DESC="region $TARGET_ARG" ;;
     window)
@@ -554,6 +566,12 @@ cmd_convert() {
   printf '%s\n' "$OUT"
 }
 
+cmd_screens() {
+  ensure_helper
+  printf 'DISPLAY\tX,Y,W,H\tSCALE\n'
+  "$HELPER" screens | awk -F'\t' '{ printf "%d\t%s\t%s\n", $1+1, $2, $3 }'
+}
+
 cmd_windows() {
   local route
   route="$( (check_capture_ready 2>/dev/null && printf '%s\n' "$CAPTURE_VIA") || true )"
@@ -701,6 +719,7 @@ case "$cmd" in
   convert)  cmd_convert "$@" ;;
   attach)   cmd_attach "$@" ;;
   windows)  cmd_windows ;;
+  screens)  cmd_screens ;;
   doctor)   cmd_doctor ;;
   -v|--version|version) echo "gififier $VERSION" ;;
   ""|-h|--help|help) usage ;;

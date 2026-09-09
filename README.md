@@ -71,13 +71,18 @@ gififier start -w Chrome
 gififier stop -o proof.gif
 ```
 
-Record a region or a specific window id:
+Record a region, a specific window id, or another display:
 
 ```sh
 gififier windows                          # list ids, apps, titles, bounds
 gififier record -i 8836 -d 5
-gififier record -r 0,80,1200,800 -d 5
+gififier record -r 0,80,1200,800 -d 5     # x,y,w,h in points, global coordinates
+gififier screens                          # list displays with bounds and scale
+gififier record --display 2 -d 5
 ```
+
+Region coordinates are global, so a region on a second display uses that display's
+bounds from `gififier screens`.
 
 Attach the GIF to the pull request of the current branch:
 

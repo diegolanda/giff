@@ -14,10 +14,13 @@ if mode == "preflight" {
 func fmt(_ v: Double) -> String { String(Int(v.rounded())) }
 
 if mode == "screens" {
-    // index \t x,y,w,h (Cocoa origin, bottom-left) \t scale
+    // index \t x,y,w,h (points, top-left origin, global coordinates) \t scale
+    // NSScreen frames use a bottom-left origin, so flip y against the main screen height.
+    let mainHeight = NSScreen.screens.first?.frame.height ?? 0
     for (i, s) in NSScreen.screens.enumerated() {
         let f = s.frame
-        print("\(i)\t\(fmt(f.origin.x)),\(fmt(f.origin.y)),\(fmt(f.width)),\(fmt(f.height))\t\(s.backingScaleFactor)")
+        let top = mainHeight - (f.origin.y + f.height)
+        print("\(i)\t\(fmt(f.origin.x)),\(fmt(top)),\(fmt(f.width)),\(fmt(f.height))\t\(s.backingScaleFactor)")
     }
     exit(0)
 }

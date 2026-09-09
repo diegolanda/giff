@@ -63,6 +63,10 @@ Record the Chrome window for 8 seconds:
 gififier record -w "Google Chrome" -d 8 -o proof.gif
 ```
 
+`-w` matches app names first, then window titles, and picks the first window in
+front-to-back order. With several windows of the same app, use `-i <id>` from
+`gififier windows` instead.
+
 Record while a script drives the UI:
 
 ```sh

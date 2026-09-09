@@ -125,11 +125,22 @@ display_rect() {
 main_screen_rect() { display_rect 1; }
 
 # Prints "id<TAB>x,y,w,h" for the first window matching an app name or title.
+# App names are matched before titles, and titles that contain "gififier" are
+# skipped, because the terminal that runs this command shows the command line
+# in its own window title.
 find_window() {
   local ql; ql="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   list_windows | awk -F'\t' -v q="$ql" '
-    index(tolower($3), q) || index(tolower($4), q) { print $1 "\t" $5; found=1; exit }
-    END { exit !found }'
+    {
+      app = tolower($3); title = tolower($4)
+      if (!byapp && index(app, q)) byapp = $1 "\t" $5
+      if (!bytitle && index(title, q) && !index(title, "gififier")) bytitle = $1 "\t" $5
+    }
+    END {
+      if (byapp) { print byapp; exit 0 }
+      if (bytitle) { print bytitle; exit 0 }
+      exit 1
+    }'
 }
 
 window_rect_by_id() {

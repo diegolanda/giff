@@ -1,10 +1,16 @@
 // Prints on-screen windows and screen geometry as TSV.
-// Usage: windows [list|screens|preflight]
+// Usage: windows [list|screens|preflight|request]
 import AppKit
 import CoreGraphics
 import Foundation
 
 let mode = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "list"
+
+if mode == "request" {
+    // Asks macOS to show the Screen Recording permission dialog for this process's
+    // responsible app, which also adds the app to the list in System Settings.
+    exit(CGRequestScreenCaptureAccess() ? 0 : 1)
+}
 
 if mode == "preflight" {
     // Exit 0 when this process may record the screen, 1 otherwise.

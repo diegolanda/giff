@@ -48,6 +48,10 @@ Terminal.app, iTerm, VS Code, or an agent runner.
    control Terminal.app (System Settings > Privacy & Security > Automation).
 
 `gififier doctor` reports which route is available and names the host application.
+`gififier doctor --fix` installs ffmpeg with Homebrew, starts the Xcode Command Line
+Tools installer, and asks macOS to show the Screen Recording dialog for the host
+application. No tool can grant the permission by itself. You still enable the switch
+and restart the application.
 To grant the permission, open System Settings > Privacy & Security > Screen & System
 Audio Recording, enable the application, and restart it. The route is cached for ten
 minutes. Run `doctor` after changing permissions.

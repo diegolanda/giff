@@ -10,8 +10,10 @@ the GIF and prints its path. You decide how to share it.
 
 ## Preconditions
 
-1. Run `gififier doctor`. If it reports a Screen Recording failure, stop and ask the
-   user to grant the permission to the named application. You cannot grant it yourself.
+1. Run `gififier doctor`. If it fails, run `gififier doctor --fix`. It installs missing
+   dependencies and asks macOS to show the Screen Recording dialog for the named
+   application. If the permission is still missing, stop and ask the user to enable it
+   in System Settings and restart the application. You cannot grant it yourself.
 2. Start the dev server and open the page in a browser window.
 
 ## Procedure

@@ -40,7 +40,9 @@ Usage:
   gififier windows [--json]               List on-screen windows (id, app, title, bounds)
   gififier find <app or title> [--json]   Print the id of the window that -w would pick
   gififier screens                        List displays (number, bounds, scale)
-  gififier doctor                         Check dependencies and permissions
+  gififier doctor [--fix]                 Check dependencies and permissions.
+                                          --fix installs ffmpeg and the Xcode tools and
+                                          requests the Screen Recording permission.
 
 Target (pick one, default is the main screen):
   -w, --window <app or title>   Record the first window whose app name or title
@@ -630,14 +632,40 @@ cmd_windows() {
 
 # ---------------------------------------------------------------- doctor ----
 
+# Asks macOS for the permission dialog and opens the settings pane. Nothing can
+# grant the permission itself.
+request_screen_permission() {
+  local app="$1"
+  if [[ -x "$HELPER" ]]; then
+    log "fix   requesting Screen Recording for $app. macOS shows a dialog and lists the app in System Settings."
+    "$HELPER" request >/dev/null 2>&1 || true
+  fi
+  log "fix   opening System Settings > Privacy & Security > Screen & System Audio Recording"
+  open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture' 2>/dev/null || true
+  log "fix   enable $app there, restart it, then run doctor again."
+}
+
 cmd_doctor() {
-  local ok=1
+  local ok=1 fix=0
+  [[ "${1:-}" != --fix ]] || fix=1
   check() { # check <label> <cmd...>
     local label="$1"; shift
     if "$@" >/dev/null 2>&1; then log "ok    $label"; else log "FAIL  $label"; ok=0; fi
   }
+  if ! command -v ffmpeg >/dev/null 2>&1 && (( fix )); then
+    if command -v brew >/dev/null 2>&1; then
+      log "fix   installing ffmpeg with Homebrew..."
+      brew install ffmpeg >/dev/null 2>&1 || log "fix   brew install ffmpeg failed"
+    else
+      log "fix   Homebrew is not installed, cannot install ffmpeg (https://brew.sh)"
+    fi
+  fi
   check "ffmpeg installed (brew install ffmpeg)" command -v ffmpeg
   check "screencapture available" command -v screencapture
+  if ! command -v swiftc >/dev/null 2>&1 && [[ ! -x "$HELPER" ]] && (( fix )); then
+    log "fix   starting the Xcode Command Line Tools installer. Finish the dialog, then run doctor again."
+    xcode-select --install >/dev/null 2>&1 || true
+  fi
   if (ensure_helper) >/dev/null 2>&1; then
     log "ok    window helper compiled ($HELPER)"
   else
@@ -651,9 +679,11 @@ cmd_doctor() {
     log "ok    Screen Recording permission via Terminal.app"
     log "      $app lacks it, so captures run inside a minimized Terminal window (about 1s slower)."
     log "      To record directly, grant Screen Recording to $app and restart it."
+    (( ! fix )) || request_screen_permission "$app"
   else
     ok=0
     log "FAIL  Screen Recording permission for $app (and Terminal.app cannot be used)"
+    (( ! fix )) || request_screen_permission "$app"
     [[ -z "$(osascript_error)" ]] || log "      Terminal.app control failed: $(osascript_error)"
     log "      Grant Screen Recording to $app in System Settings > Privacy & Security >"
     log "      Screen & System Audio Recording, then restart it. Alternatively allow $app to"
@@ -675,7 +705,7 @@ case "$cmd" in
   windows)  cmd_windows "$@" ;;
   find)     cmd_find "$@" ;;
   screens)  cmd_screens ;;
-  doctor)   cmd_doctor ;;
+  doctor)   cmd_doctor "$@" ;;
   -v|--version|version) echo "gififier $VERSION" ;;
   ""|-h|--help|help) usage ;;
   *) die "unknown command: $cmd (see --help)" ;;

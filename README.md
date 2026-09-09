@@ -22,6 +22,17 @@ git clone <this repo> ~/GitHub/gififier
 gififier doctor
 ```
 
+## Uninstall
+
+```sh
+~/GitHub/gififier/uninstall.sh            # removes the symlink
+~/GitHub/gififier/uninstall.sh --purge    # also removes ~/.cache/gififier
+```
+
+The uninstaller stops a running recording first. Pass the install directory as an
+argument if you installed somewhere other than `/usr/local/bin` or `~/.local/bin`.
+The `gififier-assets` branches in your repositories are not touched.
+
 ## Screen Recording permission
 
 macOS only lets applications with Screen Recording permission capture the screen.

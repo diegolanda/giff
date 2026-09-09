@@ -1,10 +1,15 @@
 // Prints on-screen windows and screen geometry as TSV.
-// Usage: windows [list|screens]
+// Usage: windows [list|screens|preflight]
 import AppKit
 import CoreGraphics
 import Foundation
 
 let mode = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "list"
+
+if mode == "preflight" {
+    // Exit 0 when this process may record the screen, 1 otherwise.
+    exit(CGPreflightScreenCaptureAccess() ? 0 : 1)
+}
 
 func fmt(_ v: Double) -> String { String(Int(v.rounded())) }
 

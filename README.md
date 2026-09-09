@@ -41,8 +41,8 @@ To grant the permission, open System Settings > Privacy & Security > Screen & Sy
 Audio Recording, enable the application, and restart it. The route is cached for ten
 minutes. Run `doctor` after changing permissions.
 
-Window titles are only visible with the permission. Without it, `gififier windows`
-shows app names and empty titles, and `-w` matches app names only.
+Window titles are only visible through a route with the permission. If no route has
+it, `gififier windows` still lists app names and ids, with empty titles.
 
 ## Usage
 

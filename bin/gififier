@@ -17,7 +17,6 @@ STATE_DIR="$CACHE_DIR/state"
 OUT_DIR="${GIFIFIER_OUT:-$CACHE_DIR/out}"
 HELPER="$CACHE_DIR/windows"
 HELPER_SRC="$ROOT_DIR/helpers/windows.swift"
-VIA_CACHE="$CACHE_DIR/via"
 VIA_CACHE_SECONDS=600
 
 DEFAULT_FPS="${GIFIFIER_FPS:-10}"
@@ -99,7 +98,7 @@ ensure_helper() {
 # Screen Recording permission, because window titles are hidden otherwise.
 list_windows() {
   ensure_helper
-  if [[ "$(cached_via)" == terminal ]]; then
+  if [[ "${CAPTURE_VIA:-$(cached_via)}" == terminal ]]; then
     local dir; dir="$TMP_DIR/windows"; mkdir -p "$dir"
     printf '#!/bin/bash\n%q list >%q 2>/dev/null\ntouch %q\nexit\n' "$HELPER" "$dir/out" "$dir/done" > "$dir/run.sh"
     chmod +x "$dir/run.sh"
@@ -146,6 +145,10 @@ is_num()  { [[ "$1" =~ ^[0-9]*\.?[0-9]+$ ]]; }
 optval() { (( $2 >= 2 )) || die "option $1 needs a value"; }
 
 has_screen_permission() {
+  if (ensure_helper) >/dev/null 2>&1; then
+    "$HELPER" preflight >/dev/null 2>&1
+    return
+  fi
   local t; t="$TMP_DIR/probe-direct.png"
   screencapture -x -R 0,0,2,2 "$t" >/dev/null 2>&1 && [[ -s "$t" ]]
 }
@@ -165,18 +168,24 @@ host_app() {
   echo "your terminal application"
 }
 
+# Route cache file, one per host application because the permission belongs
+# to the host.
+via_cache_file() {
+  printf '%s/via-%s\n' "$CACHE_DIR" "$(host_app | tr -c 'A-Za-z0-9._-' '-')"
+}
+
 # ---------------------------------------------------------------- terminal --
 # When the host app lacks Screen Recording permission, captures run inside a
 # Terminal.app window, because Terminal usually holds that permission.
 
-OSASCRIPT_ERROR=""
+osascript_error() { cat "$TMP_DIR/osascript.err" 2>/dev/null || true; }
 
 # Runs a shell script inside a new, minimized Terminal.app window and prints
 # the window id.
 terminal_run() {
   local script="$1" out
   out="$(osascript -e "tell application \"Terminal\" to do script (quoted form of \"$script\")" 2>&1)" \
-    || { OSASCRIPT_ERROR="$out"; return 1; }
+    || { printf '%s\n' "$out" > "$TMP_DIR/osascript.err"; return 1; }
   local win="${out##* }"
   osascript -e "tell application \"Terminal\" to set miniaturized of window id $win to true" >/dev/null 2>&1 || true
   printf '%s\n' "$win"
@@ -200,9 +209,10 @@ terminal_has_permission() {
 
 # Prints the cached capture route (direct|terminal) if it is fresh, else "".
 cached_via() {
-  [[ -f "$VIA_CACHE" ]] || return 0
-  local age; age=$(( $(date +%s) - $(stat -f %m "$VIA_CACHE") ))
-  if (( age < VIA_CACHE_SECONDS )); then cat "$VIA_CACHE"; fi
+  local f; f="$(via_cache_file)"
+  [[ -f "$f" ]] || return 0
+  local age; age=$(( $(date +%s) - $(stat -f %m "$f") ))
+  if (( age < VIA_CACHE_SECONDS )); then cat "$f"; fi
 }
 
 # Sets CAPTURE_VIA to "direct" or "terminal".
@@ -214,12 +224,12 @@ check_capture_ready() {
     terminal) terminal_has_permission || die "Terminal.app cannot record the screen. Run: gififier doctor" ;;
     auto)
       local cached; cached="$(cached_via)"
-      if [[ -n "$cached" ]]; then CAPTURE_VIA="$cached"
-      elif has_screen_permission; then CAPTURE_VIA=direct
+      if [[ -n "$cached" ]]; then CAPTURE_VIA="$cached"; return; fi
+      if has_screen_permission; then CAPTURE_VIA=direct
       elif terminal_has_permission; then CAPTURE_VIA=terminal; log "note: capturing through Terminal.app because $(host_app) lacks Screen Recording permission"
       else die "Screen Recording permission is missing for $(host_app) and Terminal.app. Run: gififier doctor"
       fi
-      mkdir -p "$CACHE_DIR"; printf '%s\n' "$CAPTURE_VIA" > "$VIA_CACHE" ;;
+      mkdir -p "$CACHE_DIR"; printf '%s\n' "$CAPTURE_VIA" > "$(via_cache_file)" ;;
     *) die "GIFIFIER_VIA must be auto, direct, or terminal" ;;
   esac
 }
@@ -264,7 +274,7 @@ launch_capture_script() {
     nohup bash "$dir/run.sh" </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
   else
-    local win; win="$(terminal_run "$dir/run.sh")" || die "cannot start Terminal.app: ${OSASCRIPT_ERROR:-unknown error}"
+    local win; win="$(terminal_run "$dir/run.sh")" || die "cannot start Terminal.app: $(osascript_error)"
     printf '%s\n' "$win" > "$dir/window"
   fi
 }
@@ -279,6 +289,7 @@ run_capture() {
   local mov="$1"; shift
   local dir; dir="$TMP_DIR/capture"; mkdir -p "$dir"
   write_capture_script "$dir" once "$mov" "$@"
+  trap 'cleanup_capture_dir "$TMP_DIR/capture"; rm -rf "$TMP_DIR"; exit 130' INT TERM
   launch_capture_script "$dir"
   if ! wait_for_file "$dir/done" $(( (DURATION + 20) * 10 )); then
     cleanup_capture_dir "$dir"; die "capture timed out"
@@ -296,7 +307,7 @@ run_capture() {
 # encode <in.mov> <out.gif> <fps> <scale> <width> <mp4:0|1>
 encode_gif() {
   local in="$1" out="$2" fps="$3" scale="$4" width="$5" mp4="$6"
-  need ffmpeg "brew install ffmpeg"
+  command -v ffmpeg >/dev/null 2>&1 || { log "ffmpeg is missing (brew install ffmpeg)"; return 1; }
   local resize
   if [[ -n "$width" ]]; then
     resize="scale=trunc(${width}/2)*2:-2:flags=lanczos"
@@ -316,7 +327,8 @@ encode_gif() {
 # sibling_path <file> <ext>: same directory and stem, different extension.
 sibling_path() {
   local dir base; dir="$(dirname "$1")"; base="$(basename "$1")"
-  printf '%s/%s.%s\n' "$dir" "${base%.*}" "$2"
+  if [[ "$dir" == . && "$1" != ./* ]]; then printf '%s.%s\n' "${base%.*}" "$2"
+  else printf '%s/%s.%s\n' "$dir" "${base%.*}" "$2"; fi
 }
 
 file_size() { du -h "$1" | cut -f1 | tr -d ' '; }
@@ -354,6 +366,7 @@ parse_target_and_opts() {
   validate_encode_opts
   is_uint "$DURATION" && (( DURATION > 0 )) || die "--duration must be a whole number of seconds"
   is_uint "$DELAY" || die "--delay must be a whole number of seconds"
+  if [[ "$TARGET_MODE" == window && -z "$TARGET_ARG" ]]; then die "--window needs an app name or title"; fi
   if [[ "$TARGET_MODE" == window-id ]]; then is_uint "$TARGET_ARG" || die "--window-id must be a number"; fi
   if [[ "$TARGET_MODE" == region ]]; then
     [[ "$TARGET_ARG" =~ ^-?[0-9]+,-?[0-9]+,[0-9]+,[0-9]+$ ]] || die "region must be x,y,w,h"
@@ -362,7 +375,7 @@ parse_target_and_opts() {
 
 validate_encode_opts() {
   is_uint "$FPS" && (( FPS > 0 )) || die "--fps must be a positive whole number"
-  [[ -z "$SCALE" ]] || is_num "$SCALE" || die "--scale must be a number"
+  [[ -z "$SCALE" ]] || { is_num "$SCALE" && awk -v s="$SCALE" 'BEGIN { exit !(s > 0) }'; } || die "--scale must be a number greater than 0"
   [[ -z "$WIDTH" ]] || is_uint "$WIDTH" || die "--width must be a whole number of pixels"
 }
 
@@ -409,7 +422,8 @@ resolve_out() {
   if [[ -z "$OUT" ]]; then
     mkdir -p "$OUT_DIR"; OUT="$OUT_DIR/gififier-$(timestamp).gif"
   fi
-  [[ "$OUT" == *.gif ]] || OUT="$OUT.gif"
+  [[ "$OUT" != */ ]] || die "output must be a file, not a directory: $OUT"
+  [[ "$OUT" == *.[gG][iI][fF] ]] || OUT="$OUT.gif"
   mkdir -p "$(dirname "$OUT")"
 }
 
@@ -434,6 +448,7 @@ finish_recording() {
 }
 
 cmd_record() {
+  need ffmpeg "brew install ffmpeg"
   parse_target_and_opts "$@"
   resolve_out
   check_capture_ready
@@ -446,6 +461,7 @@ cmd_record() {
 }
 
 cmd_start() {
+  need ffmpeg "brew install ffmpeg"
   parse_target_and_opts "$@"
   mkdir -p "$STATE_DIR"
   if [[ -d "$STATE_DIR/capture" ]]; then
@@ -475,6 +491,7 @@ cmd_start() {
 }
 
 cmd_stop() {
+  need ffmpeg "brew install ffmpeg"
   local dir="$STATE_DIR/capture"
   [[ -d "$dir" ]] || die "no recording in progress"
   wait_for_file "$dir/pid" 50 || { cleanup_capture_dir "$dir"; rm -rf "$dir"; die "the recording never started"; }
@@ -515,7 +532,8 @@ cmd_stop() {
 cmd_convert() {
   [[ $# -ge 1 ]] || die "usage: gififier convert <in.mov> [-o out.gif] [--fps n] [--scale f|--width px] [--mp4]"
   local in="$1"; shift
-  [[ -s "$in" ]] || die "input not found: $in"
+  need ffmpeg "brew install ffmpeg"
+  [[ -f "$in" && -s "$in" ]] || die "input not found: $in"
   OUT=""; FPS="$DEFAULT_FPS"; SCALE=""; WIDTH=""; MP4=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -536,7 +554,12 @@ cmd_convert() {
 }
 
 cmd_windows() {
-  check_capture_ready
+  if ! (check_capture_ready) 2>/dev/null; then
+    CAPTURE_VIA=none
+    log "note: no Screen Recording permission, so window titles are empty (run: gififier doctor)"
+  else
+    check_capture_ready 2>/dev/null
+  fi
   printf 'ID\tAPP\tTITLE\tX,Y,W,H\n'
   list_windows | awk -F'\t' '{ printf "%s\t%s\t%s\t%s\n", $1, $3, $4, $5 }'
 }
@@ -569,7 +592,7 @@ cmd_attach() {
   need gh "brew install gh"
   [[ $# -ge 1 ]] || die "usage: gififier attach <file> [--pr N] [--repo o/r] [--message text] [--body] [--no-comment]"
   local file="$1"; shift
-  [[ -s "$file" ]] || die "file not found: $file"
+  [[ -f "$file" && -s "$file" ]] || die "file not found: $file"
   local pr="" repo="" branch="$DEFAULT_ASSET_BRANCH" message="" mode="comment"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -583,19 +606,21 @@ cmd_attach() {
     esac
   done
   [[ -z "$pr" ]] || is_uint "$pr" || die "--pr must be a number"
+  local src_branch; src_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [[ -n "$repo" ]] || repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || die "not in a GitHub repo (use --repo)"
+  gh api "repos/$repo" >/dev/null 2>&1 || die "repository not found or not accessible: $repo"
   if [[ "$mode" != none && -z "$pr" ]]; then
-    pr="$(gh pr view --repo "$repo" --json number --jq .number 2>/dev/null || true)"
-    [[ -n "$pr" ]] || die "no PR found for the current branch (use --pr N, or --no-comment to only upload)"
+    [[ -n "$src_branch" ]] || die "not on a git branch (use --pr N)"
+    pr="$(gh pr view "$src_branch" --repo "$repo" --json number --jq .number 2>/dev/null || true)"
+    [[ -n "$pr" ]] || die "no open PR for branch $src_branch in $repo (create one, use --pr N, or --no-comment to only upload)"
   fi
 
   ensure_asset_branch "$repo" "$branch"
 
-  local src_branch slug base ext stem path
-  src_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo misc)"
-  slug="$(safe_name "$src_branch")"; slug="${slug:-misc}"
+  local slug base ext stem path
+  slug="$(safe_name "${src_branch:-misc}")"; slug="${slug:-misc}"
   base="$(basename "$file")"
-  ext="${base##*.}"; [[ "$ext" != "$base" ]] || ext="bin"
+  ext="${base##*.}"; [[ -n "$ext" && "$ext" != "$base" ]] || ext="bin"
   stem="$(safe_name "${base%.*}")"; stem="${stem:-file}"
   path="$slug/$(timestamp)-$$-${stem}.$(safe_name "$ext")"
 
@@ -619,7 +644,7 @@ cmd_attach() {
       log "commented on PR #$pr" ;;
     body)
       local body; body="$(gh pr view "$pr" --repo "$repo" --json body --jq .body)"
-      [[ -z "$body" ]] || body="$(printf '%s\n\n' "$body")"
+      [[ -z "$body" ]] || body="${body}"$'\n\n'
       gh pr edit "$pr" --repo "$repo" --body "${body}${md}" >/dev/null || die "cannot edit PR #$pr"
       log "appended to PR #$pr description" ;;
   esac
@@ -643,7 +668,7 @@ cmd_doctor() {
   else
     ok=0; log "FAIL  window helper: swiftc is required once (xcode-select --install)"
   fi
-  rm -f "$VIA_CACHE"
+  rm -f "$(via_cache_file)"
   local app; app="$(host_app)"
   if has_screen_permission; then
     log "ok    Screen Recording permission for $app"
@@ -654,7 +679,7 @@ cmd_doctor() {
   else
     ok=0
     log "FAIL  Screen Recording permission for $app (and Terminal.app cannot be used)"
-    [[ -z "$OSASCRIPT_ERROR" ]] || log "      Terminal.app control failed: $OSASCRIPT_ERROR"
+    [[ -z "$(osascript_error)" ]] || log "      Terminal.app control failed: $(osascript_error)"
     log "      Grant Screen Recording to $app in System Settings > Privacy & Security >"
     log "      Screen & System Audio Recording, then restart it. Alternatively allow $app to"
     log "      control Terminal.app (Privacy & Security > Automation) and grant Terminal.app"

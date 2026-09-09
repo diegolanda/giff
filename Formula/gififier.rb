@@ -5,7 +5,7 @@ class Gififier < Formula
   desc "Record a window, region, or screen to GIF on macOS"
   homepage "https://github.com/diegolanda/gififier"
   url "https://github.com/diegolanda/gififier/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "fabf76fe13acf0efa251526c942c24d84685afa066251e2424d998fd5e1568ff"
   license "MIT"
 
   depends_on :macos

@@ -1,6 +1,6 @@
 # Security
 
-gififier records the screen. Anything visible in the recorded window or region ends up
+giff records the screen. Anything visible in the recorded window or region ends up
 in the GIF, including passwords, tokens, and private messages. Review a recording before
 sharing it. `examples/attach-to-pr.sh` uploads to a branch that everyone with repository
 access can read.

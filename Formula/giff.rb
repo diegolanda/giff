@@ -1,11 +1,11 @@
 # Homebrew formula. Publish it in a tap repository (for example homebrew-tap) and
 # update url and sha256 for each release:
-#   curl -L https://github.com/diegolanda/gififier/archive/refs/tags/v0.2.0.tar.gz | shasum -a 256
-class Gififier < Formula
+#   curl -L https://github.com/diegolanda/giff/archive/refs/tags/v0.3.0.tar.gz | shasum -a 256
+class Giff < Formula
   desc "Record a window, region, or screen to GIF on macOS"
-  homepage "https://github.com/diegolanda/gififier"
-  url "https://github.com/diegolanda/gififier/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "fabf76fe13acf0efa251526c942c24d84685afa066251e2424d998fd5e1568ff"
+  homepage "https://github.com/diegolanda/giff"
+  url "https://github.com/diegolanda/giff/archive/refs/tags/v0.3.0.tar.gz"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
   depends_on "ffmpeg"
@@ -15,22 +15,22 @@ class Gififier < Formula
     system "swiftc", "-O", "-o", "windows", "helpers/windows.swift"
     (libexec/"libexec").install "windows"
     libexec.install "helpers"
-    (libexec/"bin").install "bin/gififier"
+    (libexec/"bin").install "bin/giff"
     (libexec/"skills").install Dir["skills/*"]
     libexec.install "examples", "install-skill.sh"
-    bin.install_symlink libexec/"bin/gififier"
+    bin.install_symlink libexec/"bin/giff"
   end
 
   def caveats
     <<~EOS
       Screen Recording permission is required for the app that runs your terminal.
-      Run `gififier doctor --fix` to request it.
+      Run `giff doctor --fix` to request it.
       Example PR upload script: #{opt_libexec}/examples/attach-to-pr.sh
       Install the agent skill with: #{opt_libexec}/install-skill.sh claude
     EOS
   end
 
   test do
-    assert_match "gififier", shell_output("#{bin}/gififier --version")
+    assert_match "giff", shell_output("#{bin}/giff --version")
   end
 end

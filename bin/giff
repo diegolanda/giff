@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# gififier - LICEcap-style screen recorder for the command line (macOS).
+# giff - LICEcap-style screen recorder for the command line (macOS).
 # Records a region, a window, or the whole screen to an animated GIF and
 # prints the output path so an agent can decide what to do with the file.
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 SELF="${BASH_SOURCE[0]}"
 while [[ -L "$SELF" ]]; do
   link="$(readlink "$SELF")"
@@ -12,9 +12,13 @@ while [[ -L "$SELF" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CACHE_DIR="${GIFIFIER_CACHE:-$HOME/.cache/gififier}"
+CACHE_DIR="${GIFF_CACHE:-$HOME/.cache/giff}"
+# One-time move of the cache from the tool's former name.
+if [[ -z "${GIFF_CACHE:-}" && ! -e "$CACHE_DIR" && -d "$HOME/.cache/gififier" ]]; then
+  mv "$HOME/.cache/gififier" "$CACHE_DIR" 2>/dev/null || true
+fi
 STATE_DIR="$CACHE_DIR/state"
-OUT_DIR="${GIFIFIER_OUT:-$CACHE_DIR/out}"
+OUT_DIR="${GIFF_OUT:-$CACHE_DIR/out}"
 HELPER_SRC="$ROOT_DIR/helpers/windows.swift"
 if [[ -x "$ROOT_DIR/libexec/windows" ]]; then
   HELPER="$ROOT_DIR/libexec/windows"        # prebuilt by a package (Homebrew)
@@ -23,44 +27,44 @@ else
 fi
 VIA_CACHE_SECONDS=600
 
-DEFAULT_FPS="${GIFIFIER_FPS:-10}"
+DEFAULT_FPS="${GIFF_FPS:-10}"
 
 log()  { printf '%s\n' "$*" >&2; }
-die()  { log "gififier: $*"; exit 1; }
+die()  { log "giff: $*"; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1 ($2)"; }
 
-TMP_DIR="$(mktemp -d -t gififier)"
+TMP_DIR="$(mktemp -d -t giff)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 usage() {
   cat <<EOF
-gififier $VERSION - record a window, region, or screen to GIF
+giff $VERSION - record a window, region, or screen to GIF
 
 Usage:
-  gififier record  [target] [options]     Record for a fixed duration (default 5s)
-  gififier start   [target] [options]     Start a background recording
-  gififier stop    [-o out.gif] [options] Stop the background recording and encode
-  gififier convert <in.mov> [-o out.gif]  Convert an existing video to GIF
-  gififier windows [--json]               List on-screen windows (id, app, title, bounds)
-  gififier find <app or title> [--json]   Print the id of the window that -w would pick
-  gififier screens                        List displays (number, bounds, scale)
-  gififier doctor [--fix]                 Check dependencies and permissions.
+  giff record  [target] [options]     Record for a fixed duration (default 5s)
+  giff start   [target] [options]     Start a background recording
+  giff stop    [-o out.gif] [options] Stop the background recording and encode
+  giff convert <in.mov> [-o out.gif]  Convert an existing video to GIF
+  giff windows [--json]               List on-screen windows (id, app, title, bounds)
+  giff find <app or title> [--json]   Print the id of the window that -w would pick
+  giff screens                        List displays (number, bounds, scale)
+  giff doctor [--fix]                 Check dependencies and permissions.
                                           --fix installs ffmpeg and the Xcode tools and
                                           requests the Screen Recording permission.
 
 Target (pick one, default is the main screen):
   -w, --window <app or title>   Record the first window whose app name or title
                                 contains this text (case-insensitive)
-  -i, --window-id <id>          Record the window with this id (see: gififier windows)
+  -i, --window-id <id>          Record the window with this id (see: giff windows)
   -r, --region <x,y,w,h>        Record this screen rectangle (points, top-left origin,
                                 global coordinates, so it can lie on any display)
       --screen                  Record the whole main screen
-      --display <n>             Record display n (1 is the main display, see: gififier screens)
+      --display <n>             Record display n (1 is the main display, see: giff screens)
 
 Recording options:
   -d, --duration <sec>          Seconds to record (record only, default 5)
       --delay <sec>             Wait this long before recording starts
-  -o, --out <file>              Output path (default $OUT_DIR/gififier-<timestamp>.gif)
+  -o, --out <file>              Output path (default $OUT_DIR/giff-<timestamp>.gif)
       --fps <n>                 GIF frame rate (default $DEFAULT_FPS)
       --scale <factor>          Resize factor relative to the recorded pixels.
                                 Default makes the GIF match the on-screen point size
@@ -72,13 +76,13 @@ Recording options:
       --mp4                     Also write an .mp4 next to the GIF (smaller for long clips)
 
 Environment:
-  GIFIFIER_OUT       Default output directory     GIFIFIER_FPS   Default frame rate
-  GIFIFIER_CACHE     Cache and state directory    GIFIFIER_VIA   auto | direct | terminal
+  GIFF_OUT       Default output directory     GIFF_FPS   Default frame rate
+  GIFF_CACHE     Cache and state directory    GIFF_VIA   auto | direct | terminal
 
 Examples:
-  gififier record -w "Google Chrome" -d 8 -o proof.gif
-  gififier start -w Chrome && ...drive the UI... && gififier stop -o proof.gif
-  gif=\$(gififier record -i \$(gififier find "localhost:3000") -d 6)
+  giff record -w "Google Chrome" -d 8 -o proof.gif
+  giff start -w Chrome && ...drive the UI... && giff stop -o proof.gif
+  gif=\$(giff record -i \$(giff find "localhost:3000") -d 6)
 EOF
 }
 
@@ -122,7 +126,7 @@ display_rect() {
 main_screen_rect() { display_rect 1; }
 
 # Prints "id<TAB>x,y,w,h" for the first window matching an app name or title.
-# App names are matched before titles, and titles that contain "gififier" are
+# App names are matched before titles, and titles that contain "giff" are
 # skipped, because the terminal that runs this command shows the command line
 # in its own window title.
 find_window() {
@@ -131,7 +135,7 @@ find_window() {
     {
       app = tolower($3); title = tolower($4)
       if (!byapp && index(app, q)) byapp = $1 "\t" $5
-      if (!bytitle && index(title, q) && !index(title, "gififier")) bytitle = $1 "\t" $5
+      if (!bytitle && index(title, q) && !index(title, "giff")) bytitle = $1 "\t" $5
     }
     END {
       if (byapp) { print byapp; exit 0 }
@@ -160,7 +164,7 @@ is_num()  { [[ "$1" =~ ^[0-9]*\.?[0-9]+$ ]]; }
 optval() { (( $2 >= 2 )) || die "option $1 needs a value"; }
 
 has_screen_permission() {
-  if (ensure_helper) 2>&1 >/dev/null | grep -v '^gififier:' >&2; [[ -x "$HELPER" ]]; then
+  if (ensure_helper) 2>&1 >/dev/null | grep -v '^giff:' >&2; [[ -x "$HELPER" ]]; then
     "$HELPER" preflight >/dev/null 2>&1
     return
   fi
@@ -233,19 +237,19 @@ cached_via() {
 # Sets CAPTURE_VIA to "direct" or "terminal".
 check_capture_ready() {
   need screencapture "macOS built-in"
-  CAPTURE_VIA="${GIFIFIER_VIA:-auto}"
+  CAPTURE_VIA="${GIFF_VIA:-auto}"
   case "$CAPTURE_VIA" in
-    direct) has_screen_permission || die "Screen Recording permission is missing for $(host_app). Run: gififier doctor" ;;
-    terminal) terminal_has_permission || die "Terminal.app cannot record the screen. Run: gififier doctor" ;;
+    direct) has_screen_permission || die "Screen Recording permission is missing for $(host_app). Run: giff doctor" ;;
+    terminal) terminal_has_permission || die "Terminal.app cannot record the screen. Run: giff doctor" ;;
     auto)
       local cached; cached="$(cached_via)"
       if [[ -n "$cached" ]]; then CAPTURE_VIA="$cached"; return; fi
       if has_screen_permission; then CAPTURE_VIA=direct
       elif terminal_has_permission; then CAPTURE_VIA=terminal; log "note: capturing through Terminal.app because $(host_app) lacks Screen Recording permission"
-      else die "Screen Recording permission is missing for $(host_app) and Terminal.app. Run: gififier doctor"
+      else die "Screen Recording permission is missing for $(host_app) and Terminal.app. Run: giff doctor"
       fi
       mkdir -p "$CACHE_DIR"; printf '%s\n' "$CAPTURE_VIA" > "$(via_cache_file)" ;;
-    *) die "GIFIFIER_VIA must be auto, direct, or terminal" ;;
+    *) die "GIFF_VIA must be auto, direct, or terminal" ;;
   esac
 }
 
@@ -405,19 +409,19 @@ resolve_target() {
     screen)
       CAPTURE_RECT="$(main_screen_rect)"; CAPTURE_DESC="main screen" ;;
     display)
-      CAPTURE_RECT="$(display_rect "$TARGET_ARG")" || die "display $TARGET_ARG not found (try: gififier screens)"
+      CAPTURE_RECT="$(display_rect "$TARGET_ARG")" || die "display $TARGET_ARG not found (try: giff screens)"
       CAPTURE_ARGS=(-D "$TARGET_ARG"); CAPTURE_DESC="display $TARGET_ARG at $CAPTURE_RECT" ;;
     region)
       CAPTURE_ARGS=(-R "$TARGET_ARG"); CAPTURE_RECT="$TARGET_ARG"; CAPTURE_DESC="region $TARGET_ARG" ;;
     window)
       local hit; hit="$(find_window "$TARGET_ARG" || true)"
-      [[ -n "$hit" ]] || die "no on-screen window matches '$TARGET_ARG' (try: gififier windows)"
+      [[ -n "$hit" ]] || die "no on-screen window matches '$TARGET_ARG' (try: giff windows)"
       local id="${hit%%$'\t'*}"
       CAPTURE_RECT="${hit#*$'\t'}"
       CAPTURE_ARGS=(-l "$id" -o); CAPTURE_DESC="window $id ($TARGET_ARG) at $CAPTURE_RECT" ;;
     window-id)
       CAPTURE_RECT="$(window_rect_by_id "$TARGET_ARG")"
-      [[ -n "$CAPTURE_RECT" ]] || die "window id $TARGET_ARG is not on screen (try: gififier windows)"
+      [[ -n "$CAPTURE_RECT" ]] || die "window id $TARGET_ARG is not on screen (try: giff windows)"
       CAPTURE_ARGS=(-l "$TARGET_ARG" -o); CAPTURE_DESC="window $TARGET_ARG at $CAPTURE_RECT" ;;
   esac
   if [[ "$CURSOR" == 1 ]]; then CAPTURE_ARGS+=(-C); fi
@@ -442,7 +446,7 @@ default_scale() {
 # Normalizes OUT: default location, .gif extension, parent directory exists.
 resolve_out() {
   if [[ -z "$OUT" ]]; then
-    mkdir -p "$OUT_DIR"; OUT="$OUT_DIR/gififier-$(timestamp).gif"
+    mkdir -p "$OUT_DIR"; OUT="$OUT_DIR/giff-$(timestamp).gif"
   fi
   [[ "$OUT" != */ ]] || die "output must be a file, not a directory: $OUT"
   [[ "$OUT" == *.[gG][iI][fF] ]] || OUT="$OUT.gif"
@@ -452,12 +456,12 @@ resolve_out() {
 # finish_recording <mov> <out.gif> <rect>
 finish_recording() {
   local mov="$1" out="$2" rect="${3:-}"
-  [[ -s "$mov" ]] || die "no video was produced. Is Screen Recording allowed for $(host_app)? Run: gififier doctor"
+  [[ -s "$mov" ]] || die "no video was produced. Is Screen Recording allowed for $(host_app)? Run: giff doctor"
   local scale; scale="$(default_scale "$mov" "$rect")"
   local keep; keep="$(sibling_path "$out" mov)"
   if ! encode_gif "$mov" "$out" "$FPS" "$scale" "$WIDTH" "$MP4"; then
     mv "$mov" "$keep"
-    die "encoding failed. The recording is kept at $keep (try: gififier convert)"
+    die "encoding failed. The recording is kept at $keep (try: giff convert)"
   fi
   if [[ "$KEEP_VIDEO" == 1 ]]; then
     mv "$mov" "$keep"; chmod 644 "$keep"
@@ -488,7 +492,7 @@ cmd_start() {
   mkdir -p "$STATE_DIR"
   if [[ -d "$STATE_DIR/capture" ]]; then
     if [[ -s "$STATE_DIR/capture/pid" ]] && kill -0 "$(cat "$STATE_DIR/capture/pid")" 2>/dev/null; then
-      die "a recording is already running (gififier stop)"
+      die "a recording is already running (giff stop)"
     fi
     cleanup_capture_dir "$STATE_DIR/capture"; rm -rf "$STATE_DIR/capture"
   fi
@@ -501,15 +505,15 @@ cmd_start() {
   write_capture_script "$dir" bg "$dir/recording.mov" ${CAPTURE_ARGS[@]+"${CAPTURE_ARGS[@]}"}
   launch_capture_script "$dir"
   if ! wait_for_file "$dir/pid" 100; then
-    cleanup_capture_dir "$dir"; rm -rf "$dir"; die "the capture did not start. Run: gififier doctor"
+    cleanup_capture_dir "$dir"; rm -rf "$dir"; die "the capture did not start. Run: giff doctor"
   fi
   sleep 0.5
   if ! kill -0 "$(cat "$dir/pid")" 2>/dev/null; then
     log "$(capture_error_text "$dir")"
     cleanup_capture_dir "$dir"; rm -rf "$dir"
-    die "screencapture exited immediately. Run: gififier doctor"
+    die "screencapture exited immediately. Run: giff doctor"
   fi
-  log "recording $CAPTURE_DESC (pid $(cat "$dir/pid")). Stop with: gififier stop -o proof.gif"
+  log "recording $CAPTURE_DESC (pid $(cat "$dir/pid")). Stop with: giff stop -o proof.gif"
 }
 
 cmd_stop() {
@@ -551,7 +555,7 @@ cmd_stop() {
 }
 
 cmd_convert() {
-  [[ $# -ge 1 ]] || die "usage: gififier convert <in.mov> [-o out.gif] [--fps n] [--scale f|--width px] [--mp4]"
+  [[ $# -ge 1 ]] || die "usage: giff convert <in.mov> [-o out.gif] [--fps n] [--scale f|--width px] [--mp4]"
   local in="$1"; shift
   need ffmpeg "brew install ffmpeg"
   [[ -f "$in" && -s "$in" ]] || die "input not found: $in"
@@ -602,10 +606,10 @@ cmd_find() {
       *) query="$1"; shift ;;
     esac
   done
-  [[ -n "$query" ]] || die "usage: gififier find <app or title> [--json]"
+  [[ -n "$query" ]] || die "usage: giff find <app or title> [--json]"
   resolve_route_for_listing
   local hit; hit="$(find_window "$query" || true)"
-  [[ -n "$hit" ]] || die "no on-screen window matches '$query' (try: gififier windows)"
+  [[ -n "$hit" ]] || die "no on-screen window matches '$query' (try: giff windows)"
   local id="${hit%%$'\t'*}"
   if (( json )); then
     list_windows | awk -F'\t' -v id="$id" '$1==id' | windows_json
@@ -619,7 +623,7 @@ resolve_route_for_listing() {
   route="$( (check_capture_ready 2>/dev/null && printf '%s\n' "$CAPTURE_VIA") || true )"
   CAPTURE_VIA="${route:-none}"
   if [[ "$CAPTURE_VIA" == none ]]; then
-    log "note: no Screen Recording permission, so window titles are empty (run: gififier doctor)"
+    log "note: no Screen Recording permission, so window titles are empty (run: giff doctor)"
   fi
 }
 
@@ -711,7 +715,7 @@ case "$cmd" in
   find)     cmd_find "$@" ;;
   screens)  cmd_screens ;;
   doctor)   cmd_doctor "$@" ;;
-  -v|--version|version) echo "gififier $VERSION" ;;
+  -v|--version|version) echo "giff $VERSION" ;;
   ""|-h|--help|help) usage ;;
   *) die "unknown command: $cmd (see --help)" ;;
 esac

@@ -11,28 +11,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Syntax check with stock bash 3.2
-        run: /bin/bash -n bin/gififier install.sh install-skill.sh uninstall.sh examples/attach-to-pr.sh
+        run: /bin/bash -n bin/giff install.sh install-skill.sh uninstall.sh examples/attach-to-pr.sh
       - name: shellcheck
-        run: brew install shellcheck && shellcheck -S warning bin/gififier install.sh install-skill.sh uninstall.sh examples/attach-to-pr.sh
+        run: brew install shellcheck && shellcheck -S warning bin/giff install.sh install-skill.sh uninstall.sh examples/attach-to-pr.sh
       - name: Build window helper
         run: swiftc -O -o windows helpers/windows.swift && ./windows screens
       - name: Help and version
-        run: bin/gififier --version && bin/gififier --help >/dev/null
+        run: bin/giff --version && bin/giff --help >/dev/null
       - name: Convert a synthetic video
         run: |
           brew install ffmpeg
           ffmpeg -hide_banner -loglevel error -f lavfi -i "testsrc=size=320x240:rate=10:duration=1" in.mov
-          bin/gififier convert in.mov --width 160 -o out.gif
+          bin/giff convert in.mov --width 160 -o out.gif
           test -s out.gif
       - name: Skill install renders every harness
         run: |
           mkdir -p /tmp/proj /tmp/home
           ./install-skill.sh all --project /tmp/proj --copy
           ./install-skill.sh all --project /tmp/proj --copy   # idempotent
-          test -f /tmp/proj/.claude/skills/gififier/SKILL.md
-          test -f /tmp/proj/.codex/skills/gififier/SKILL.md
+          test -f /tmp/proj/.claude/skills/giff/SKILL.md
+          test -f /tmp/proj/.codex/skills/giff/SKILL.md
           HOME=/tmp/home ./install-skill.sh claude
-          test -f /tmp/home/.claude/skills/gififier/SKILL.md
-          test -f /tmp/proj/.cursor/rules/gififier.mdc
-          test -f /tmp/proj/.github/instructions/gififier.instructions.md
-          test "$(grep -c 'gififier:start' /tmp/proj/AGENTS.md)" = 1
+          test -f /tmp/home/.claude/skills/giff/SKILL.md
+          test -f /tmp/proj/.cursor/rules/giff.mdc
+          test -f /tmp/proj/.github/instructions/giff.instructions.md
+          test "$(grep -c 'giff:start' /tmp/proj/AGENTS.md)" = 1

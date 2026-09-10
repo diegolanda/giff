@@ -4,7 +4,7 @@
 # prints the output path so an agent can decide what to do with the file.
 set -euo pipefail
 
-VERSION="0.3.1"
+VERSION="0.3.2"
 SELF="${BASH_SOURCE[0]}"
 while [[ -L "$SELF" ]]; do
   link="$(readlink "$SELF")"

@@ -26,8 +26,11 @@ the GIF and prints its path. You decide how to share it.
    stdout. Without `-o`, files go to `~/.cache/giff/out`, outside the project.
 5. Check that the GIF is under a few MB. If it is large, re-encode the kept video:
    `giff convert "${gif%.gif}.mov" --width 800 --fps 8 -o "$gif"`.
-6. Share it. The tool stops at the GIF path. Ask the user how they want it in the PR,
-   unless the project already documents a way. Do not commit the GIF to the source branch.
+6. Post it on the PR with GitHub CLI 2.99 or newer:
+   `gh pr comment <n> --body "<what the recording shows>" --attach "$gif"`.
+   Or include it when creating the PR: `gh pr create --fill --attach "$gif"`.
+   The file must be under 10 MB. If `gh` is older, ask the user to upgrade it.
+   Do not commit the GIF to the source branch.
 
 For a short fixed clip, use one command: `gif=$(giff record -i <id> -d 6)`.
 

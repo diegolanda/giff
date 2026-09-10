@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Docs and skill recommend `gh pr comment --attach` (GitHub CLI 2.99+) to post the GIF.
+
 ## 0.3.1
 
 - Removed the PR upload example script. Sharing the GIF is the caller's job.

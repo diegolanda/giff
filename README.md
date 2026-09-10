@@ -142,10 +142,16 @@ Homebrew installs keep these scripts under `$(brew --prefix)/opt/giff/libexec`.
 
 ## Sharing the GIF
 
-The tool stops at the file. GitHub has no API to upload an image into a pull request
-comment, so to show a GIF there you need a URL: drag the file into the comment box in
-the browser, attach it to a release with `gh release upload`, or upload it to an image
-host or bucket. A coding agent should ask which one you want.
+The tool stops at the file. To put it in a pull request, use GitHub CLI 2.99 or newer,
+which uploads a file into a comment, a PR body, or an issue:
+
+```sh
+gh pr comment 42 --body "Before and after of the new modal" --attach "$gif"
+gh pr create --fill --attach "$gif"
+```
+
+GIFs up to 10 MB are accepted. It works on private repositories. GitHub Enterprise
+Server is not supported yet. Use `--width 800` or `--fps 8` when the file is large.
 
 ## Development
 

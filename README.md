@@ -140,13 +140,12 @@ replaces a skill directory it did not create unless you pass `--force`.
 
 Homebrew installs keep these scripts under `$(brew --prefix)/opt/giff/libexec`.
 
-## Posting a GIF on a pull request
+## Sharing the GIF
 
-This is outside the tool on purpose. `examples/attach-to-pr.sh` shows one verified way:
-it uploads the file to an orphan `giff-assets` branch through the GitHub API and
-comments on the PR with the image, so binaries stay out of the source history. Use it
-as is, or adapt it. The image URL renders inside GitHub. For a private repository the
-URL does not work with `curl` or an API token.
+The tool stops at the file. GitHub has no API to upload an image into a pull request
+comment, so to show a GIF there you need a URL: drag the file into the comment box in
+the browser, attach it to a release with `gh release upload`, or upload it to an image
+host or bucket. A coding agent should ask which one you want.
 
 ## Development
 

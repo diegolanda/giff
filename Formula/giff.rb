@@ -17,7 +17,7 @@ class Giff < Formula
     libexec.install "helpers"
     (libexec/"bin").install "bin/giff"
     (libexec/"skills").install Dir["skills/*"]
-    libexec.install "examples", "install-skill.sh"
+    libexec.install "install-skill.sh"
     bin.install_symlink libexec/"bin/giff"
   end
 
@@ -25,7 +25,6 @@ class Giff < Formula
     <<~EOS
       Screen Recording permission is required for the app that runs your terminal.
       Run `giff doctor --fix` to request it.
-      Example PR upload script: #{opt_libexec}/examples/attach-to-pr.sh
       Install the agent skill with: #{opt_libexec}/install-skill.sh claude
     EOS
   end

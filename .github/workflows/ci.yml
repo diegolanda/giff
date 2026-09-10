@@ -11,9 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Syntax check with stock bash 3.2
-        run: /bin/bash -n bin/giff install.sh install-skill.sh uninstall.sh examples/attach-to-pr.sh
+        run: /bin/bash -n bin/giff install.sh install-skill.sh uninstall.sh
       - name: shellcheck
-        run: brew install shellcheck && shellcheck -S warning bin/giff install.sh install-skill.sh uninstall.sh examples/attach-to-pr.sh
+        run: brew install shellcheck && shellcheck -S warning bin/giff install.sh install-skill.sh uninstall.sh
       - name: Build window helper
         run: swiftc -O -o windows helpers/windows.swift && ./windows screens
       - name: Help and version

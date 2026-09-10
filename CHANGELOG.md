@@ -1,8 +1,10 @@
 # Changelog
 
-## 0.3.0
+## 0.3.1
 
 - Removed the PR upload example script. Sharing the GIF is the caller's job.
+
+## 0.3.0
 - Renamed from gififier to giff. Command, cache directory, environment variables
   (`GIFF_*`), skill name, and repository all follow. An existing `~/.cache/gififier`
   is moved to `~/.cache/giff` on first run.

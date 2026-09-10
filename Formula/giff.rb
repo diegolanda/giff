@@ -1,10 +1,10 @@
 # Homebrew formula. Publish it in a tap repository (for example homebrew-tap) and
 # update url and sha256 for each release:
-#   curl -L https://github.com/diegolanda/giff/archive/refs/tags/v0.3.0.tar.gz | shasum -a 256
+#   curl -L https://github.com/diegolanda/giff/archive/refs/tags/v0.3.1.tar.gz | shasum -a 256
 class Giff < Formula
   desc "Record a window, region, or screen to GIF on macOS"
   homepage "https://github.com/diegolanda/giff"
-  url "https://github.com/diegolanda/giff/archive/refs/tags/v0.3.0.tar.gz"
+  url "https://github.com/diegolanda/giff/archive/refs/tags/v0.3.1.tar.gz"
   sha256 "ab2b8efba56507700df668ce1f1dae1fad00ae4c0a2787688952879a5a52bd3f"
   license "MIT"
 

@@ -5,7 +5,7 @@ class Giff < Formula
   desc "Record a window, region, or screen to GIF on macOS"
   homepage "https://github.com/diegolanda/giff"
   url "https://github.com/diegolanda/giff/archive/refs/tags/v0.3.1.tar.gz"
-  sha256 "ab2b8efba56507700df668ce1f1dae1fad00ae4c0a2787688952879a5a52bd3f"
+  sha256 "fd130f9024a210d49ca4e9c6d5b30a1485e91e20e967def439cc3c4e6f631855"
   license "MIT"
 
   depends_on "ffmpeg"
